@@ -1,7 +1,12 @@
+# Images
 *.png
 *.svg
 *.jpg
 *.gif
-cmake-build-debug
 
+# Logs
+*.log
+
+# Other
+cmake-build-debug
 .ipynb_checkpoints
