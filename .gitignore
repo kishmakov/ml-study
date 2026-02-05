@@ -7,6 +7,9 @@
 # Logs
 *.log
 
+# Data
+*.csv
+
 # Other
 cmake-build-debug
 .ipynb_checkpoints
