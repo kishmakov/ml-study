@@ -24,7 +24,7 @@ class MeanRegressor(RegressorMixin):
         X : array like, shape = (n_samples, n_features)
         Data to predict
         '''
-        return self.y_mean
+        return np.full(X.shape[0], self.y_mean)
     
 estimator = MeanRegressor()
 X = np.array([[1, 2], [2, 3], [3, 4]])

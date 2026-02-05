@@ -25,7 +25,7 @@ class MostFrequentClassifier(ClassifierMixin):
         X : array like, shape = (n_samples, n_features)
         Data to predict
         '''
-        return self.most_frequent
+        return np.full(X.shape[0], self.most_frequent)
     
 estimator = MostFrequentClassifier()
 X = np.array([[1, 2], [2, 3], [3, 4], [5, 1], [0, 1]])
