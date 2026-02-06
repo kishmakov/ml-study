@@ -6,6 +6,7 @@
 
 # Logs
 *.log
+catboost_info
 
 # Data
 *.csv
