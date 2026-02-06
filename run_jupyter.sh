@@ -25,7 +25,8 @@ if command -v jupyter-lab >/dev/null 2>&1; then
     --port "$PORT" \
     --ServerApp.open_browser=false \
     --ServerApp.root_dir="$SCRIPT_DIR" \
-    --ServerApp.token='' \
+    --IdentityProvider.token='' \
+    --ServerApp.disable_check_xsrf=True \
     --ServerApp.password=''
 else
   # Classic Notebook
