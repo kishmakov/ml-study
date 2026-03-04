@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 from typing import Optional, List
 from sklearn.base import TransformerMixin
@@ -11,14 +12,19 @@ class BaseDataPreprocessor(TransformerMixin):
         self.scaler = StandardScaler()
         self.columns = needed_columns
 
+    def _select_columns(self, data: pd.DataFrame) -> pd.DataFrame:
+        if self.columns is None:
+            return data
+        return data.filter(items=self.columns)
+
     def fit(self, data, *args):
         """
         Prepares the class for future transformations
         :param data: pd.DataFrame with all available columns
         :return: self
         """
-        data_subset = data.filter(items = self.columns)
-        self.scaler.fit(data_subset)
+        data_subset = self._select_columns(data)
+        self.scaler.fit(data_subset, args)
         return self
 
     def transform(self, data: pd.DataFrame) -> np.array:
@@ -27,5 +33,5 @@ class BaseDataPreprocessor(TransformerMixin):
         :param data: pd.DataFrame with all available columns
         :return: np.array with preprocessed features
         """
-        data_subset = data.filter(items = self.columns)
+        data_subset = self._select_columns(data)
         return self.scaler.transform(data_subset)
