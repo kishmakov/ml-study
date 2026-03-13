@@ -21,7 +21,7 @@ class SGDLinearRegressor(RegressorMixin):
         self.steps = 0
 
         for epoch in range(self.max_steps):
-            for start in range(0, X.shape[1], self.batch_size):
+            for start in range(0, X.shape[0], self.batch_size):
                 end = start + self.batch_size
 
                 X_batch = X[start:end]
@@ -29,17 +29,15 @@ class SGDLinearRegressor(RegressorMixin):
 
                 lin = X_batch @ self.W + self.b - Y_batch
 
-                dW = 2 * X_batch.T @ lin / self.batch_size + 2 * self.regularization * self.W
-                db = 2 * np.sum(lin) / self.batch_size
+                batch_n = X_batch.shape[0]
+                dW = 2 * X_batch.T @ lin / batch_n + 2 * self.regularization * self.W
+                db = 2 * np.sum(lin) / batch_n
 
                 dW = dW * self.lr
                 db = db * self.lr
 
-                self.pb = self.b
-                self.pW = self.W
-
-                self.W = self.W + dW
-                self.b = self.b + db
+                self.W -= dW
+                self.b -= db
 
                 self.steps += 1
                 dL2 = np.sqrt(np.sum(dW ** 2))
