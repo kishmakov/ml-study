@@ -15,7 +15,7 @@ class SGDLinearRegressor(RegressorMixin):
         self.b = None
 
     def fit(self, X, Y):
-        self.W = np.random.randn(X.shape[1]) * 0.01
+        self.W = np.random.uniform(-1.0, 1.0, size=X.shape[1])
         self.b = 0
 
         self.steps = 0
@@ -33,6 +33,8 @@ class SGDLinearRegressor(RegressorMixin):
                 dW = 2 * X_batch.T @ lin / batch_n + 2 * self.regularization * self.W
                 db = 2 * np.sum(lin) / batch_n
 
+                dL2 = np.sqrt(np.sum(dW ** 2))
+
                 dW = dW * self.lr
                 db = db * self.lr
 
@@ -40,7 +42,6 @@ class SGDLinearRegressor(RegressorMixin):
                 self.b -= db
 
                 self.steps += 1
-                dL2 = np.sqrt(np.sum(dW ** 2))
 
                 if (self.steps > self.max_steps) or dL2 < self.delta_converged:
                     return self
