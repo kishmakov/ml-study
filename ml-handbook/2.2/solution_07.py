@@ -89,7 +89,7 @@ class OneHotPreprocessor(BaseDataPreprocessor):
 
     def fit(self, data, *args):
         super().fit(data, *args)
-        self.oh_encoder.fit(self._select_oh_columns())
+        self.oh_encoder.fit(self._select_oh_columns(data))
         return self
 
 
