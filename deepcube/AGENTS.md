@@ -1,4 +1,8 @@
-### Implementation Details
+# Project
+
+This project is a setup to test DeepCubeA algorithm for different puzzles.
+
+# Implementation Details
 
 - Keep assertion checks simple `assert foo, bar`, don't use ifs
 - Avoid default values other than in test code

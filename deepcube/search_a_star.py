@@ -24,7 +24,7 @@ def solve_a_star(
     puzzle: Puzzle,
     cost_to_go: CostToGo,
     weight: float,
-    max_generated_states: int,
+    max_states: int,
 ) -> SearchResult:
     """Solve one puzzle state with A*.
 
@@ -34,7 +34,7 @@ def solve_a_star(
     """
 
     assert weight >= 0, "path_cost_weight must be non-negative"
-    assert max_generated_states > 0, "max_generated_states must be positive"
+    assert max_states > 0, "max_generated_states must be positive"
 
     start = puzzle.state_key()
     open_heap: list[tuple[float, int, float, StateKey]] = []
@@ -75,7 +75,7 @@ def solve_a_star(
             child_path_cost = path_cost + transition_cost
             if child_path_cost >= best_cost.get(child, inf):
                 continue
-            if child not in best_cost and len(best_cost) >= max_generated_states:
+            if child not in best_cost and len(best_cost) >= max_states:
                 continue
 
             best_cost[child] = child_path_cost

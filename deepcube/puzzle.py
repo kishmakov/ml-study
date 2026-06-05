@@ -23,8 +23,8 @@ class Puzzle(Protocol):
     """Action names indexed by integer action id."""
 
     @staticmethod
-    def solved_state() -> StateKey:
-        """Return the serialized canonical solved state."""
+    def solved_states() -> list[StateKey]:
+        """Return serialized states that should be treated as solved."""
 
     @staticmethod
     def inverse_action(action: int) -> int:

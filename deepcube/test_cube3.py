@@ -6,7 +6,7 @@ from argparse import ArgumentParser
 from dataclasses import dataclass
 from random import Random
 
-from costtogo import CostToGo
+from costtogo import load_cost_to_go
 from cube3 import Cube3
 from puzzle import StateKey
 from search_a_star import solve_a_star
@@ -15,6 +15,8 @@ from search_a_star import solve_a_star
 NUM_CASES = 20
 SCRAMBLE_SEED_LIMIT = 2**32
 PATH_COST_WEIGHT = 1.0
+INVERSE_CHECK_MIN_LENGTH = 10
+INVERSE_CHECK_MAX_LENGTH = 20
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +46,23 @@ def check_valid(start_state: StateKey, actions: tuple[int, ...]) -> bool:
     return cube.is_solved()
 
 
+def check_random_inverse_sequences(seed: int) -> None:
+    rng = Random(seed)
+    cube = Cube3()
+
+    for length in range(INVERSE_CHECK_MIN_LENGTH, INVERSE_CHECK_MAX_LENGTH + 1):
+        cube.reset(Cube3.solved_states()[0])
+        initial_state = cube.state_key()
+        actions = tuple(rng.choice(list(cube.actions())) for _ in range(length))
+
+        for action in actions:
+            cube.apply(action)
+        for action in reversed(actions):
+            cube.apply(cube.inverse_action(action))
+
+        assert cube.state_key() == initial_state, (length, actions)
+
+
 def main() -> None:
     parser = ArgumentParser()
     parser.add_argument("--depth", type=int, default=5)
@@ -51,11 +70,13 @@ def main() -> None:
     parser.add_argument("--max-states", type=int, default=5000)
     args = parser.parse_args()
 
+    check_random_inverse_sequences(args.seed)
+
     cases = generate_cases(args.depth, args.seed)
     solved_count = 0
 
     cube3 = Cube3()
-    cost_to_go = CostToGo()
+    cost_to_go = load_cost_to_go(cube3, "cpu")
 
     for idx, case in enumerate(cases):
         cube3.reset(case.state)
@@ -66,7 +87,7 @@ def main() -> None:
 
         print(
             f"{idx}: depth={case.scramble_depth} "
-            f"solved={result.solved} "
+            f"solved={1 if result.solved else 0} "
             f"solution={len(result.actions)} "
             f"states={result.generated_states}",
         )
