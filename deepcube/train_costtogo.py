@@ -17,10 +17,10 @@ from os import makedirs
 from os.path import exists
 from random import Random, seed as set_python_random_seed
 from time import time
+from tqdm import tqdm
 from typing import Any
 
 import numpy as np
-from tqdm import tqdm
 
 from costtogo import (
     CostToGoNet,
@@ -43,7 +43,6 @@ from search_a_star import solve_a_star
 
 MAX_STEPS = 30
 PRE_TRAIN_EPOCHS = 10
-BELLMAN_UPDATES = 4
 BATCH_SIZE = 512
 EVAL_BATCH_SIZE = 1024
 LR = 1e-3
@@ -51,12 +50,11 @@ TARGET_LOSS_THRESHOLD = 0.05
 TARGET_MAX_EPOCHS = 16
 CLOSE_STATE_BASE_REPETITIONS = 32
 
-# CTG_EVAL_DEPTHS = ( 5,  7, 10, 13, 15, 17, 20, 30)
-# CTG_EVAL_COUNT  = (20, 20, 20, 20, 20, 20, 20, 20)
-CTG_EVAL_DEPTHS = ( 5,  7, 10, 13)
-CTG_EVAL_COUNT  = (20, 20, 20, 20)
+CTG_EVAL_DEPTHS = ( 5,  7, 10, 13, 15, 17, 20, 30)
+CTG_EVAL_COUNT  = (20, 20, 20, 20, 20, 20, 20, 20)
 
-CTG_EVAL_MAX_STATES = 5000
+
+CTG_EVAL_MAX_STATES = 65_000
 CTG_EVAL_WEIGHT = 0.1
 CTG_EVAL_THREADS = 12
 
@@ -818,8 +816,7 @@ def train_one_epoch(
         opt.zero_grad()
         loss.backward()
         opt.step()
-        last_loss = loss.item()
-        loss_sum += float(per_example_loss.sum().item())
+        loss_sum += per_example_loss.sum().item()
         num_examples += len(indices)
         steps += 1
 
@@ -931,8 +928,9 @@ def main() -> None:
     parser = ArgumentParser()
     parser.add_argument("--puzzle", default=DEFAULT_PUZZLE, help=PUZZLE_HELP)
     parser.add_argument("--seed", type=int, default=239)
-    parser.add_argument("--close-states", type=int, default=32 * 1024)
-    parser.add_argument("--bellman-states", type=int, default=32 * 1024)
+    parser.add_argument("--close-states", type=int, default=32*1024)
+    parser.add_argument("--bellman-states", type=int, default=32*1024)
+    parser.add_argument("--bellman-iterations", type=int, default=1024*1024)
     args = parser.parse_args()
 
     train_puzzle_cost_to_go(
@@ -942,7 +940,7 @@ def main() -> None:
         args.bellman_states,
         MAX_STEPS,
         PRE_TRAIN_EPOCHS,
-        BELLMAN_UPDATES,
+        args.bellman_iterations,
         TARGET_LOSS_THRESHOLD,
         TARGET_MAX_EPOCHS,
         BATCH_SIZE,
