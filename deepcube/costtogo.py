@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-from os.path import exists
 from typing import Any, Self
 
 import numpy as np
@@ -19,9 +18,6 @@ from puzzle import Puzzle, StateFloat
 VALUE_NET_HIDDEN_DIM = 512
 VALUE_NET_RESNET_DIM = 384
 VALUE_NET_NUM_RESNET_BLOCKS = 2
-MODEL_DIR = "/tmp/cube"
-MODEL_PATH = f"{MODEL_DIR}/model.pt"
-META_PATH = f"{MODEL_DIR}/meta.json"
 
 
 class CostToGo:
@@ -78,7 +74,6 @@ class CostToGoNet(nn.Module):
         )
 
     def forward(self, state: Any) -> Any:
-        state = state.to(dtype=torch.float32)
         if state.ndim == 1:
             state = state.unsqueeze(0)
         assert state.shape[1] == self.input_size, (
@@ -121,15 +116,6 @@ class NeuralCostToGo:
 
 def count_params(model: CostToGoNet) -> int:
     return sum(parameter.numel() for parameter in model.parameters())
-
-
-def load_cost_to_go(puzzle: Puzzle, device: str) -> CostToGo | NeuralCostToGo:
-    assert exists(MODEL_PATH), f"cost-to-go model not found at {MODEL_PATH}"
-    return NeuralCostToGo.from_checkpoint(
-        MODEL_PATH,
-        puzzle,
-        device,
-    )
 
 
 def _state_dict_from_checkpoint(checkpoint: Any) -> Any:

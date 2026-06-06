@@ -1,8 +1,8 @@
-"""Train Cube3 neural cost-to-go model.
+"""Train a neural cost-to-go model.
 
 The training loop mirrors the baseline DAVI shape: first fit exact near-goal
 targets collected by BFS, then refine on Bellman targets from random walks.
-Weights are written to ``/tmp/cube/model.pt``.
+Weights are written to ``/tmp/cube/model.pt`` by default.
 """
 
 from __future__ import annotations
@@ -20,15 +20,18 @@ import numpy as np
 
 from costtogo import (
     CostToGoNet,
-    META_PATH,
-    MODEL_DIR,
-    MODEL_PATH,
     count_params,
     nn,
     torch,
 )
-from cube3 import Cube3
-from puzzle import StateKey
+from puzzle import Puzzle, StateKey
+from puzzle_factory import (
+    DEFAULT_PUZZLE,
+    MODEL_DIR,PUZZLE_HELP,
+    create_puzzle,
+    model_path_for,
+    meta_path_for,
+)
 
 
 NUM_CLOSE_STATES = 4096
@@ -44,21 +47,24 @@ LR = 1e-3
 TRAIN_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
-def collect_close_states(num_states: int) -> tuple[list[StateKey], np.ndarray]:
-    cube = Cube3()
-    solved = cube.solved_states()[0]
-    queue = deque([(solved, 0)])
-    seen = {solved}
-    states = [solved]
-    targets = [0.0]
+def collect_close_states(
+    num_states: int,
+    puzzle: Puzzle,
+) -> tuple[list[StateKey], np.ndarray]:
+    solved_states = puzzle.solved_states()
+    queue = deque([(solved, 0) for solved in solved_states])
+    seen = {solved for solved in solved_states}
+    states = [solved for solved in solved_states]
+    targets = [0.0 for _ in solved_states]
 
     while queue and len(states) < num_states:
         state, distance = queue.popleft()
-        for action in cube.actions():
+        puzzle.reset(state)
+        for action in puzzle.actions():
             if len(states) >= num_states:
                 break
-            cube.reset(state)
-            child, _ = cube.apply(action)
+            puzzle.reset(state)
+            child, _ = puzzle.apply(action)
             if child in seen:
                 continue
             seen.add(child)
@@ -69,7 +75,12 @@ def collect_close_states(num_states: int) -> tuple[list[StateKey], np.ndarray]:
     return states, np.asarray(targets, dtype=np.float32)
 
 
-def collect_walk_states(num_walks: int, max_walk: int, seed: int) -> list[StateKey]:
+def collect_walk_states(
+    num_walks: int,
+    max_walk: int,
+    seed: int,
+    puzzle: Puzzle,
+) -> list[StateKey]:
     assert num_walks > 0, "num_walks must be positive"
     assert max_walk > 0, "max_walk must be positive"
 
@@ -77,22 +88,25 @@ def collect_walk_states(num_walks: int, max_walk: int, seed: int) -> list[StateK
     states: list[StateKey] = []
 
     for _ in range(num_walks):
-        cube = Cube3()
         previous_action: int | None = None
         walk_len = rng.randint(1, max_walk)
+        puzzle.reset(rng.choice(puzzle.solved_states()))
         for _depth in range(walk_len):
-            candidates = list(cube.actions())
+            candidates = list(puzzle.actions())
             if previous_action is not None:
-                candidates.remove(cube.inverse_action(previous_action))
+                inverse = puzzle.inverse_action(previous_action)
+                candidates = [action for action in candidates if action != inverse]
+            assert candidates, "puzzle has no legal actions"
             action = rng.choice(candidates)
-            cube.apply(action)
-            states.append(cube.state_key())
+            puzzle.apply(action)
+            states.append(puzzle.state_key())
             previous_action = action
 
     return list(dict.fromkeys(states))
 
 
-def train_cube3_cost_to_go(
+def train_puzzle_cost_to_go(
+    puzzle_name: str,
     seed: int,
     num_close_states: int,
     num_walks: int,
@@ -104,8 +118,6 @@ def train_cube3_cost_to_go(
     eval_batch_size: int,
     lr: float,
     device: str,
-    model_path: str,
-    meta_path: str,
 ) -> dict[str, Any]:
     assert seed >= 0, "seed must be non-negative"
 
@@ -113,18 +125,23 @@ def train_cube3_cost_to_go(
     rng = np.random.default_rng(seed)
     torch.manual_seed(seed)
 
-    cube = Cube3()
-    input_size = len(cube.cost_to_go_input())
-    model = CostToGoNet.from_puzzle(cube).to(device)
+    puzzle = create_puzzle(puzzle_name)
+    input_size = len(puzzle.cost_to_go_input())
+    model = CostToGoNet.from_puzzle(puzzle).to(device)
 
-    close_states, close_targets = collect_close_states(num_close_states)
+    print(
+        f"training puzzle={puzzle_name} input_size={input_size} "
+        f"params={count_params(model)} device={device}",
+    )
+
+    close_states, close_targets = collect_close_states(num_close_states, puzzle)
     opt = torch.optim.Adam(model.parameters(), lr=lr)
     history: list[dict[str, float | int | str]] = []
 
     for epoch in range(pre_train_epochs):
         loss = train_one_epoch(
             model,
-            cube,
+            puzzle,
             close_states,
             close_targets,
             batch_size,
@@ -137,15 +154,15 @@ def train_cube3_cost_to_go(
 
     target_model = clone_model(model)
     for update in range(bellman_updates):
-        states = collect_walk_states(num_walks, max_walk, seed + update + 1)
-        bellman = bellman_targets(cube, target_model, states, eval_batch_size, device)
-        train_states = close_states + states
-        train_targets = np.concatenate([close_targets, bellman])
+        b_states = collect_walk_states(num_walks, max_walk, seed + update + 1, puzzle)
+        b_targets = bellman_targets(puzzle, target_model, b_states, eval_batch_size, device)
+        train_states = close_states + b_states
+        train_targets = np.concatenate([close_targets, b_targets])
 
         for epoch in range(target_epochs):
             loss = train_one_epoch(
                 model,
-                cube,
+                puzzle,
                 train_states,
                 train_targets,
                 batch_size,
@@ -160,6 +177,7 @@ def train_cube3_cost_to_go(
 
     makedirs(MODEL_DIR, exist_ok=True)
     config = {
+        "puzzle": puzzle_name,
         "num_close_states": num_close_states,
         "num_walks": num_walks,
         "max_walk": max_walk,
@@ -174,6 +192,8 @@ def train_cube3_cost_to_go(
         "params": count_params(model),
         "history": history,
     }
+    model_path = model_path_for(puzzle_name)
+    meta_path = meta_path_for(puzzle_name)
     torch.save({"state_dict": model.state_dict(), "config": config}, model_path)
     with open(meta_path, "w", encoding="utf-8") as f:
         dump(
@@ -191,7 +211,7 @@ def train_cube3_cost_to_go(
 
 def train_one_epoch(
     model: CostToGoNet,
-    cube: Cube3,
+    puzzle: Puzzle,
     states: list[StateKey],
     targets: np.ndarray,
     batch_size: int,
@@ -213,7 +233,7 @@ def train_one_epoch(
         if len(indices) == 0:
             continue
         batch_states = [states[int(idx)] for idx in indices]
-        x = states_to_tensor(cube, batch_states, device)
+        x = states_to_tensor(puzzle, batch_states, device)
         y = torch.from_numpy(targets[indices].astype(np.float32)).to(device)
 
         pred = model(x)
@@ -227,7 +247,7 @@ def train_one_epoch(
 
 
 def bellman_targets(
-    cube: Cube3,
+    puzzle: Puzzle,
     target_model: CostToGoNet,
     states: list[StateKey],
     eval_batch_size: int,
@@ -238,19 +258,19 @@ def bellman_targets(
     groups: list[tuple[int, int]] = []
 
     for state in states:
-        cube.reset(state)
-        if cube.is_solved():
+        puzzle.reset(state)
+        if puzzle.is_solved():
             groups.append((len(next_states), len(next_states)))
             continue
 
         group_start = len(next_states)
-        for action in cube.actions():
-            cube.reset(state)
-            child, _ = cube.apply(action)
+        for action in puzzle.actions():
+            puzzle.reset(state)
+            child, _ = puzzle.apply(action)
             next_states.append(child)
         groups.append((group_start, len(next_states)))
 
-    next_values = predict_values(cube, target_model, next_states, eval_batch_size, device)
+    next_values = predict_values(puzzle, target_model, next_states, eval_batch_size, device)
     for idx, (group_start, group_end) in enumerate(groups):
         if group_start == group_end:
             targets[idx] = 0.0
@@ -261,7 +281,7 @@ def bellman_targets(
 
 
 def predict_values(
-    cube: Cube3,
+    puzzle: Puzzle,
     model: CostToGoNet,
     states: list[StateKey],
     batch_size: int,
@@ -274,20 +294,20 @@ def predict_values(
     with torch.no_grad():
         for start in range(0, len(states), batch_size):
             batch = states[start : start + batch_size]
-            x = states_to_tensor(cube, batch, device)
+            x = states_to_tensor(puzzle, batch, device)
             pred = model(x).cpu().numpy()
             preds.append(np.maximum(pred, 0.0).astype(np.float32))
 
     return np.concatenate(preds) if preds else np.asarray([], dtype=np.float32)
 
 
-def states_to_tensor(cube: Cube3, states: list[StateKey], device: str) -> Any:
+def states_to_tensor(puzzle: Puzzle, states: list[StateKey], device: str) -> Any:
     assert torch is not None, "PyTorch is required for states_to_tensor"
 
     encoded = []
     for state in states:
-        cube.reset(state)
-        encoded.append(cube.cost_to_go_input())
+        puzzle.reset(state)
+        encoded.append(puzzle.cost_to_go_input())
     return torch.from_numpy(np.stack(encoded).astype(np.float32)).to(device)
 
 
@@ -301,10 +321,12 @@ def clone_model(model: CostToGoNet) -> CostToGoNet:
 
 def main() -> None:
     parser = ArgumentParser()
+    parser.add_argument("--puzzle", default=DEFAULT_PUZZLE, help=PUZZLE_HELP)
     parser.add_argument("--seed", type=int, default=239)
     args = parser.parse_args()
 
-    train_cube3_cost_to_go(
+    train_puzzle_cost_to_go(
+        args.puzzle,
         args.seed,
         NUM_CLOSE_STATES,
         NUM_WALKS,
@@ -316,8 +338,6 @@ def main() -> None:
         EVAL_BATCH_SIZE,
         LR,
         TRAIN_DEVICE,
-        MODEL_PATH,
-        META_PATH,
     )
 
 

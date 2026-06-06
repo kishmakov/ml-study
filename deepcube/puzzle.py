@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Protocol, TypeAlias
 
 import numpy as np
@@ -22,12 +23,10 @@ class Puzzle(Protocol):
     action_names: tuple[str, ...]
     """Action names indexed by integer action id."""
 
-    @staticmethod
-    def solved_states() -> list[StateKey]:
+    def solved_states(self) -> list[StateKey]:
         """Return serialized states that should be treated as solved."""
 
-    @staticmethod
-    def inverse_action(action: int) -> int:
+    def inverse_action(self, action: int) -> int:
         """Return the inverse to given action."""
 
     def state_key(self) -> StateKey:
@@ -39,11 +38,14 @@ class Puzzle(Protocol):
     def cost_to_go_input(self) -> StateFloat:
         """Return the current state representation used by cost-to-go."""
 
-    def actions(self) -> range:
-        """Return integer action ids in ``range(len(action_names))``."""
+    def actions(self) -> Iterable[int]:
+        """Return integer action ids available from the current state."""
 
     def apply(self, action: int) -> tuple[StateKey, float]:
         """Apply ``action`` and return ``(state_key, cost)``."""
 
     def is_solved(self) -> bool:
         """Return whether the current state is solved."""
+
+    def scramble(self, num_moves: int, seed: int) -> tuple[StateKey, tuple[int, ...]]:
+        """Scramble from a solved state and return ``(state_key, actions)``."""
