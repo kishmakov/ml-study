@@ -383,10 +383,9 @@ class Cube3:
     def is_solved(self) -> bool:
         return self._state in _SOLVED_STATE_SET
 
-    def scramble(self, num_moves: int, seed: int = 239) -> tuple[StateKey, tuple[int, ...]]:
+    def scramble(self, num_moves: int, rng: Random) -> tuple[StateKey, tuple[int, ...]]:
         assert num_moves >= 0, "num_moves must be non-negative"
-        rng = Random(seed)
-        self._state = _SOLVED_STATES[0]
+        self._state = rng.choice(_SOLVED_STATES)
         actions: list[int] = []
         previous: int | None = None
         for _ in range(num_moves):

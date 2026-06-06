@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from random import Random
 from typing import Protocol, TypeAlias
 
 import numpy as np
@@ -47,5 +48,5 @@ class Puzzle(Protocol):
     def is_solved(self) -> bool:
         """Return whether the current state is solved."""
 
-    def scramble(self, num_moves: int, seed: int) -> tuple[StateKey, tuple[int, ...]]:
-        """Scramble from a solved state and return ``(state_key, actions)``."""
+    def scramble(self, num_moves: int, rng: Random) -> tuple[StateKey, tuple[int, ...]]:
+        """Scramble from random current state and return ``(state_key, actions)``."""

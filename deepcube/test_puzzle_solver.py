@@ -11,9 +11,8 @@ from puzzle_factory import DEFAULT_PUZZLE, PUZZLE_HELP, create_puzzle, model_pat
 from search_a_star import solve_a_star
 
 
-NUM_CASES = 20
 SCRAMBLE_SEED_LIMIT = 2**32
-PATH_COST_WEIGHT = 1.0
+PATH_COST_WEIGHT = 0.1
 INVERSE_CHECK_MIN_LENGTH = 10
 INVERSE_CHECK_MAX_LENGTH = 20
 
