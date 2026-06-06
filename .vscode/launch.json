@@ -1,0 +1,31 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Train",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/deepcube/train_costtogo.py",
+            "console": "integratedTerminal",
+            "env": {
+                "ENV_ID": "cylinder_game",
+                "TRAIN_TIME_LIMIT": "60"
+            },
+            "python": "${workspaceFolder}/deepcube/.venv/bin/python",
+            "cwd": "${workspaceFolder}/deepcube"
+        },
+        {
+            "name": "Test",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/deepcube/test_cube3.py",
+            "console": "integratedTerminal",
+            "env": {
+                "ENV_ID": "cylinder_game",
+                "TRAIN_TIME_LIMIT": "60"
+            },
+            "python": "${workspaceFolder}/deepcube/.venv/bin/python",
+            "cwd": "${workspaceFolder}/deepcube"
+        }
+    ]
+}

@@ -1,3 +1,6 @@
 {
-    "github.copilot.enable": false
+  "github.copilot.enable": false,
+  "search.exclude": {
+    "**/.venv": true
+  }
 }
