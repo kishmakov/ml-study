@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from os.path import exists
 from re import fullmatch
 
 from cube3 import Cube3
 from n_puzzle import NPuzzle
 from puzzle import Puzzle
-from costtogo import CostToGo, NeuralCostToGo
+from costtogo import NeuralCostToGo
 
 
 DEFAULT_PUZZLE = "Cube3"
@@ -41,20 +40,14 @@ def _normalize_puzzle_name(puzzle_name: str) -> str:
     )
 
 
-def model_path_for(name: str):
+def model_path_for(name: str) -> str:
     return f"{MODEL_DIR}/model_{name.lower()}.pt"
 
 
-def meta_path_for(name: str):
+def meta_path_for(name: str) -> str:
     return f"{MODEL_DIR}/meta_{name.lower()}.json"
 
 
-def load_cost_to_go(puzzle: Puzzle, checkout_path: str, device: str) -> CostToGo | NeuralCostToGo:
-    # return CostToGo()
-    assert exists(checkout_path), f"cost-to-go model not found at {checkout_path}"
-    return NeuralCostToGo.from_checkpoint(
-        checkout_path,
-        puzzle,
-        device,
-    )
+def load_cost_to_go(puzzle: Puzzle, checkpoint_path: str, device: str) -> NeuralCostToGo:
+    return NeuralCostToGo.from_checkpoint(checkpoint_path, puzzle, device)
 

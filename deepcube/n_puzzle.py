@@ -8,11 +8,10 @@ the blank tile.  Actions follow the DeepCubeA N-puzzle environment names:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from random import Random
 
 import numpy as np
 
-from puzzle import StateFloat, StateKey
+from puzzle import Puzzle, StateFloat, StateKey
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,7 +68,7 @@ def _swap_zero_idx(dim: int, zero_idx: int, action: int) -> int:
     return zero_idx - 1
 
 
-class NPuzzle:
+class NPuzzle(Puzzle):
     """Stateful sliding puzzle with fixed inverse action ids."""
 
     action_names: tuple[str, ...] = _ACTION_NAMES
@@ -124,26 +123,6 @@ class NPuzzle:
 
     def is_solved(self) -> bool:
         return self._state == self._solved_state
-
-    def scramble(self, num_moves: int, seed: int) -> tuple[StateKey, tuple[int, ...]]:
-        assert num_moves >= 0, "num_moves must be non-negative"
-        rng = Random(seed)
-        self._state = self._solved_state
-        actions: list[int] = []
-        previous: int | None = None
-
-        for _ in range(num_moves):
-            candidates = list(self.actions())
-            if previous is not None:
-                inverse = self.inverse_action(previous)
-                filtered = [action for action in candidates if action != inverse]
-                candidates = filtered or candidates
-            action = rng.choice(candidates)
-            self.apply(action)
-            actions.append(action)
-            previous = action
-
-        return self.state_key(), tuple(actions)
 
     @staticmethod
     def _validate_action(action: int) -> int:

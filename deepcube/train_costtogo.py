@@ -11,9 +11,7 @@ from argparse import ArgumentParser
 from atexit import register
 from collections import deque
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from json import dump, load
 from multiprocessing import get_context
-from os import makedirs
 from os.path import exists
 from random import Random, seed as set_python_random_seed
 from time import time
@@ -21,14 +19,9 @@ from tqdm import tqdm
 from typing import Any
 
 import numpy as np
+import torch
 
-from costtogo import (
-    CostToGoNet,
-    NeuralCostToGo,
-    count_params,
-    nn,
-    torch,
-)
+from costtogo import CostToGoNet, NeuralCostToGo, count_params
 from puzzle import Puzzle, StateKey
 from puzzle_factory import (
     DEFAULT_PUZZLE,
@@ -39,6 +32,20 @@ from puzzle_factory import (
     meta_path_for,
 )
 from search_a_star import solve_a_star
+from state_io import (
+    ensure_model_dir,
+    load_training_checkpoint,
+    load_training_meta,
+    log_bellman_update,
+    log_ctg_eval,
+    log_pre_epoch,
+    log_resume,
+    log_training_start,
+    log_until_fit_epoch,
+    save_training_checkpoint,
+    save_training_meta,
+    save_training_state,
+)
 
 
 MAX_STEPS = 30
@@ -68,6 +75,7 @@ _CTG_WORKER_PUZZLE: Puzzle | None = None
 _CTG_WORKER_HEURISTIC: NeuralCostToGo | None = None
 _CTG_WORKER_TORCH_CONFIGURED = False
 _CTG_EVAL_EXECUTOR: ProcessPoolExecutor | None = None
+_LAST_CHECKPOINT_TIME: float = time()
 
 
 def collect_close_states(
@@ -159,7 +167,7 @@ def train_puzzle_cost_to_go(
 ) -> dict[str, Any]:
     assert seed >= 0, "seed must be non-negative"
 
-    makedirs(MODEL_DIR, exist_ok=True)
+    ensure_model_dir(MODEL_DIR)
 
     started_at = time()
     torch.manual_seed(seed)
@@ -173,11 +181,13 @@ def train_puzzle_cost_to_go(
     history: list[dict[str, float | int | str]] = []
     progress = _initial_progress()
 
-    print(
-        f"training puzzle={puzzle_name} input={puzzle.cost_to_go_input().shape}",
-        f"params={count_params(model)} device={TRAIN_DEVICE}",
-        f"num_close_states={num_close_states}",
-        f"num_bellman_states={num_bellman_states}",
+    log_training_start(
+        puzzle_name,
+        puzzle.cost_to_go_input().shape,
+        count_params(model),
+        TRAIN_DEVICE,
+        num_close_states,
+        num_bellman_states,
     )
 
     config = {
@@ -210,11 +220,7 @@ def train_puzzle_cost_to_go(
         assert exists(checkpoint_path), (
             f"training checkpoint not found at {checkpoint_path}"
         )
-        checkpoint = torch.load(
-            checkpoint_path,
-            map_location=TRAIN_DEVICE,
-            weights_only=False,
-        )
+        checkpoint = load_training_checkpoint(checkpoint_path, TRAIN_DEVICE)
         assert "state_dict" in checkpoint, f"invalid checkpoint: {checkpoint_path}"
         assert "optimizer_state_dict" in checkpoint, (
             f"invalid checkpoint without optimizer state: {checkpoint_path}"
@@ -227,7 +233,7 @@ def train_puzzle_cost_to_go(
         assert "seed_offset" in progress, (
             f"invalid progress without seed_offset: {meta_path}"
         )
-        print(f"resuming from {meta_path}: progress={progress}")
+        log_resume(meta_path, progress)
     else:
         config["ctg_eval"] = create_ctg_eval_config(seed, puzzle)
 
@@ -318,7 +324,7 @@ def run_pretraining_phase(
         history.append(
             {"stage": "pre", "epoch": epoch, "loss": avg_loss, "seed_offset": seed_offset}
         )
-        print(f"pre epoch={epoch} loss={avg_loss:.4f}")
+        log_pre_epoch(epoch, avg_loss)
 
         progress = _pre_progress(epoch + 1, pre_train_epochs, seed_offset + 1)
 
@@ -399,11 +405,7 @@ def run_bellman_phase(
                 "seed_offset": seed_offset,
             }
         )
-        print(
-            f"update={update} loss={train_result['loss']:.4f} "
-            f"last={train_result['loss']:.4f} "
-            f"epochs={train_result['epochs']}"
-        )
+        log_bellman_update(update, train_result["loss"], train_result["epochs"])
 
         progress = _bellman_progress(
             pre_train_epochs,
@@ -433,9 +435,16 @@ def save_checkpoint_then_update_ctg_meta(
     meta_path: str,
     started_at: float,
 ) -> None:
+    global _LAST_CHECKPOINT_TIME
+
     save_training_checkpoint(model, opt, config, progress, model_path)
     append_ctg_metric(config, progress, model_path)
     save_training_meta(config, progress, model_path, meta_path, started_at)
+
+    now = time()
+    elapsed = now - _LAST_CHECKPOINT_TIME
+    print(f"Time since last checkpoint: {elapsed:.2f}s")
+    _LAST_CHECKPOINT_TIME = now
 
 
 def finalize_training_state(
@@ -459,11 +468,6 @@ def finalize_training_state(
         int(progress["seed_offset"]),
     )
     save_training_state(model, opt, config, progress, model_path, meta_path, started_at)
-
-
-def load_training_meta(meta_path: str) -> dict[str, Any]:
-    with open(meta_path, encoding="utf-8") as f:
-        return load(f)
 
 
 def create_ctg_eval_config(seed: int, puzzle: Puzzle) -> dict[str, Any]:
@@ -514,11 +518,7 @@ def append_ctg_metric(
         }
 
     ctg_eval["metrics"].append(metric)
-    print(
-        "ctg eval iteration="
-        f"{metric['iteration']} "
-        f"depths={','.join(str(depth) for depth in ctg_eval['bunches'])}",
-    )
+    log_ctg_eval(metric["iteration"], ctg_eval["bunches"])
 
 
 def get_ctg_eval_executor() -> ProcessPoolExecutor:
@@ -636,20 +636,12 @@ def get_ctg_worker(
         return _CTG_WORKER_PUZZLE, _CTG_WORKER_HEURISTIC
 
     puzzle = create_puzzle(puzzle_name)
-    model = CostToGoNet.from_puzzle(puzzle)
-    checkpoint = torch.load(model_path, map_location="cpu", weights_only=False)
-    state_dict = (
-        checkpoint["state_dict"]
-        if isinstance(checkpoint, dict) and "state_dict" in checkpoint
-        else checkpoint
-    )
-    model.load_state_dict(state_dict)
 
     _CTG_WORKER_PUZZLE_NAME = puzzle_name
     _CTG_WORKER_MODEL_PATH = model_path
     _CTG_WORKER_MODEL_VERSION = model_version
     _CTG_WORKER_PUZZLE = puzzle
-    _CTG_WORKER_HEURISTIC = NeuralCostToGo(model, "cpu")
+    _CTG_WORKER_HEURISTIC = NeuralCostToGo.from_checkpoint(model_path, puzzle, "cpu")
     return _CTG_WORKER_PUZZLE, _CTG_WORKER_HEURISTIC
 
 
@@ -665,55 +657,6 @@ def configure_ctg_worker_torch() -> None:
     except RuntimeError:
         pass
     _CTG_WORKER_TORCH_CONFIGURED = True
-
-
-def save_training_state(
-    model: CostToGoNet,
-    opt: Any,
-    config: dict[str, Any],
-    progress: dict[str, int | str],
-    model_path: str,
-    meta_path: str,
-    started_at: float,
-) -> None:
-    save_training_checkpoint(model, opt, config, progress, model_path)
-    save_training_meta(config, progress, model_path, meta_path, started_at)
-
-
-def save_training_checkpoint(
-    model: CostToGoNet,
-    opt: Any,
-    config: dict[str, Any],
-    progress: dict[str, int | str],
-    model_path: str,
-) -> None:
-    checkpoint = {
-        "state_dict": model.state_dict(),
-        "optimizer_state_dict": opt.state_dict(),
-        "config": config,
-        "progress": progress,
-    }
-    torch.save(checkpoint, model_path)
-
-
-def save_training_meta(
-    config: dict[str, Any],
-    progress: dict[str, int | str],
-    model_path: str,
-    meta_path: str,
-    started_at: float,
-) -> None:
-    with open(meta_path, "w", encoding="utf-8") as f:
-        dump(
-            {
-                "model_path": model_path,
-                "wall_time_sec": time() - started_at,
-                "progress": progress,
-                "config": config,
-            },
-            f,
-            indent=2,
-        )
 
 
 def reset_epoch_randomness(epoch_seed: int) -> tuple[Random, np.random.Generator]:
@@ -795,8 +738,6 @@ def train_one_epoch(
     opt: Any,
     rng: np.random.Generator,
 ) -> dict[str, float | int]:
-    assert torch is not None, "PyTorch is required for train_one_epoch"
-    assert nn is not None, "PyTorch is required for train_one_epoch"
     assert len(states) == len(targets), "states and targets must have same length"
 
     model.train()
@@ -850,10 +791,7 @@ def train_until_fit(
             opt,
             rng,
         )
-        print(
-            f"  until_fit epoch={epoch}",
-            f"loss={last_loss:.4f}",
-        )
+        log_until_fit_epoch(epoch, last_loss)
 
         epoch += 1
 
@@ -902,8 +840,6 @@ def predict_values(
     states: list[StateKey],
     batch_size: int,
 ) -> np.ndarray:
-    assert torch is not None, "PyTorch is required for predict_values"
-
     model.eval()
     preds: list[np.ndarray] = []
     with torch.no_grad():
@@ -917,8 +853,6 @@ def predict_values(
 
 
 def states_to_tensor(puzzle: Puzzle, states: list[StateKey]) -> Any:
-    assert torch is not None, "PyTorch is required for states_to_tensor"
-
     encoded = []
     for state in states:
         puzzle.reset(state)

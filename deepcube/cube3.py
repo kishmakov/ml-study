@@ -15,11 +15,10 @@ composed directly on ``Cube3State``.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from random import Random
 
 import numpy as np
 
-from puzzle import StateFloat, StateKey
+from puzzle import Puzzle, StateFloat, StateKey
 
 
 # ---------------------------------------------------------------------------
@@ -342,7 +341,7 @@ def _face_colors_from_state(state: Cube3State) -> np.ndarray:
 # Cube3 class
 # ---------------------------------------------------------------------------
 
-class Cube3:
+class Cube3(Puzzle):
     """3x3 Rubik's Cube with the 12 DeepCubeA quarter-turn actions."""
 
     faces:          tuple[str, ...] = _FACES
@@ -382,20 +381,6 @@ class Cube3:
 
     def is_solved(self) -> bool:
         return self._state in _SOLVED_STATE_SET
-
-    def scramble(self, num_moves: int, rng: Random) -> tuple[StateKey, tuple[int, ...]]:
-        assert num_moves >= 0, "num_moves must be non-negative"
-        self._state = rng.choice(_SOLVED_STATES)
-        actions: list[int] = []
-        previous: int | None = None
-        for _ in range(num_moves):
-            candidates = [a for a in self.actions()
-                          if previous is None or a != self.inverse_action(previous)]
-            action = rng.choice(candidates)
-            self.apply(action)
-            actions.append(action)
-            previous = action
-        return self.state_key(), tuple(actions)
 
     # -- private -------------------------------------------------------------
 

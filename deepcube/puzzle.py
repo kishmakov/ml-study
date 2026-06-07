@@ -49,4 +49,28 @@ class Puzzle(Protocol):
         """Return whether the current state is solved."""
 
     def scramble(self, num_moves: int, rng: Random) -> tuple[StateKey, tuple[int, ...]]:
-        """Scramble from random current state and return ``(state_key, actions)``."""
+        """Scramble from a random solved state and return ``(state_key, actions)``.
+
+        Default implementation shared by every puzzle: reset to a random solved
+        state, then apply ``num_moves`` random non-backtracking actions. Actions
+        undoing the previous move are avoided; if that leaves no choices (the
+        action set can be state-dependent) the full action set is used instead.
+        """
+        assert num_moves >= 0, "num_moves must be non-negative"
+
+        self.reset(rng.choice(self.solved_states()))
+        actions: list[int] = []
+        previous: int | None = None
+        for _ in range(num_moves):
+            candidates = [
+                action
+                for action in self.actions()
+                if previous is None or action != self.inverse_action(previous)
+            ]
+            assert candidates, "too few actions to avoid backtracking"
+            action = rng.choice(candidates)
+            self.apply(action)
+            actions.append(action)
+            previous = action
+
+        return self.state_key(), tuple(actions)
