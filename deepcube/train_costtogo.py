@@ -57,6 +57,7 @@ CTG_EVAL_COUNT  = (20, 20, 20, 20, 20, 20, 20, 20)
 CTG_EVAL_MAX_STATES = 65_000
 CTG_EVAL_WEIGHT = 0.1
 CTG_EVAL_THREADS = 12
+CTG_EVAL_POP_BATCH_SIZE = 64
 
 TRAIN_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -605,9 +606,10 @@ def evaluate_ctg_task_process(
     puzzle.reset(state)
     result = solve_a_star(
         puzzle,
-        heuristic,
+        heuristic.batch,
         CTG_EVAL_WEIGHT,
         CTG_EVAL_MAX_STATES,
+        CTG_EVAL_POP_BATCH_SIZE,
     )
     return depth, value, int(result.solved)
 
@@ -857,7 +859,7 @@ def train_until_fit(
 
     return {
         "loss": last_loss,
-        "epochs": epoch + 1,
+        "epochs": epoch,
     }
 
 

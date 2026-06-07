@@ -10,7 +10,7 @@ from math import inf
 from puzzle import Puzzle, StateFloat, StateKey
 
 
-CostToGo = Callable[[StateFloat], float]
+BatchCostToGo = Callable[[list[StateFloat]], list[float]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,19 +22,21 @@ class SearchResult:
 
 def solve_a_star(
     puzzle: Puzzle,
-    cost_to_go: CostToGo,
+    cost_to_go_batch: BatchCostToGo,
     weight: float,
     max_states: int,
+    pop_batch_size: int,
 ) -> SearchResult:
-    """Solve one puzzle state with A*.
+    """Solve one puzzle state while batching heuristic calls.
 
-    The search starts from ``puzzle.state_key()``. ``cost_to_go`` is the heuristic
-    approximation h(s). At most ``max_generated_states`` unique states are
-    generated.
+    This follows the same shape as DeepCubeA's parallel weighted A*: pop several
+    frontier nodes, expand them, filter already-seen children, evaluate the
+    remaining child heuristics in one batch, then push them into the open heap.
     """
 
     assert weight >= 0, "path_cost_weight must be non-negative"
     assert max_states > 0, "max_generated_states must be positive"
+    assert pop_batch_size > 0, "pop_batch_size must be positive"
 
     start = puzzle.state_key()
     open_heap: list[tuple[float, int, float, StateKey]] = []
@@ -43,50 +45,76 @@ def solve_a_star(
     parents: dict[StateKey, tuple[StateKey, int, float]] = {}
 
     push_count = 0
-    start_priority = _priority(0.0, cost_to_go(puzzle.cost_to_go_input()), weight)
+    start_heuristic = cost_to_go_batch([puzzle.cost_to_go_input()])[0]
     heappush(
         open_heap,
-        (start_priority, push_count, 0.0, start),
+        (_priority(0.0, start_heuristic, weight), push_count, 0.0, start),
     )
 
     while open_heap:
-        _, _, path_cost, state = heappop(open_heap)
+        popped: list[tuple[float, StateKey]] = []
+        while open_heap and len(popped) < pop_batch_size:
+            _, _, path_cost, state = heappop(open_heap)
 
-        if path_cost != best_cost.get(state, inf):
-            continue
-        if closed_cost.get(state, inf) <= path_cost:
-            continue
-        puzzle.reset(state)
-        if puzzle.is_solved():
-            actions = _reconstruct_actions(state, parents)
-            return SearchResult(
-                solved=True,
-                actions=actions,
-                generated_states=len(best_cost),
-            )
-
-        closed_cost[state] = path_cost
-
-        for action in puzzle.actions():
+            if path_cost != best_cost.get(state, inf):
+                continue
+            if closed_cost.get(state, inf) <= path_cost:
+                continue
             puzzle.reset(state)
-            child, transition_cost = puzzle.apply(action)
-            assert transition_cost >= 0, "A* requires non-negative transition costs"
+            if puzzle.is_solved():
+                return SearchResult(
+                    solved=True,
+                    actions=_reconstruct_actions(state, parents),
+                    generated_states=len(best_cost),
+                )
+            popped.append((path_cost, state))
 
-            child_path_cost = path_cost + transition_cost
-            if child_path_cost >= best_cost.get(child, inf):
-                continue
-            if child not in best_cost and len(best_cost) >= max_states:
-                continue
+        if not popped:
+            continue
 
-            best_cost[child] = child_path_cost
-            parents[child] = (state, action, transition_cost)
+        candidate_inputs: list[StateFloat] = []
+        candidates: list[tuple[float, StateKey]] = []
+        for path_cost, state in popped:
+            closed_cost[state] = path_cost
+            puzzle.reset(state)
+
+            for action in puzzle.actions():
+                puzzle.reset(state)
+                child, transition_cost = puzzle.apply(action)
+                assert transition_cost >= 0, "A* requires non-negative transition costs"
+
+                child_path_cost = path_cost + transition_cost
+                if child_path_cost >= best_cost.get(child, inf):
+                    continue
+                if child not in best_cost and len(best_cost) >= max_states:
+                    continue
+
+                best_cost[child] = child_path_cost
+                parents[child] = (state, action, transition_cost)
+                candidate_inputs.append(puzzle.cost_to_go_input())
+                candidates.append((child_path_cost, child))
+
+        if not candidates:
+            continue
+
+        child_heuristics = cost_to_go_batch(candidate_inputs)
+        assert len(child_heuristics) == len(candidates), (
+            "batched heuristic returned wrong result count"
+        )
+        for (child_path_cost, child), child_heuristic in zip(
+            candidates,
+            child_heuristics,
+        ):
             push_count += 1
-            child_priority = _priority(
-                child_path_cost,
-                cost_to_go(puzzle.cost_to_go_input()),
-                weight,
+            heappush(
+                open_heap,
+                (
+                    _priority(child_path_cost, child_heuristic, weight),
+                    push_count,
+                    child_path_cost,
+                    child,
+                ),
             )
-            heappush(open_heap, (child_priority, push_count, child_path_cost, child))
 
     return SearchResult(
         solved=False,

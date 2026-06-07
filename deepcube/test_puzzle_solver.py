@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from argparse import ArgumentParser
 from dataclasses import dataclass
+from os.path import exists
 from random import Random
 
+from costtogo import CostToGo
 from puzzle import Puzzle, StateKey
 from puzzle_factory import DEFAULT_PUZZLE, PUZZLE_HELP, create_puzzle, model_path_for, load_cost_to_go
 from search_a_star import solve_a_star
@@ -13,6 +15,7 @@ from search_a_star import solve_a_star
 
 SCRAMBLE_SEED_LIMIT = 2**32
 PATH_COST_WEIGHT = 0.1
+POP_BATCH_SIZE = 64
 INVERSE_CHECK_MIN_LENGTH = 10
 INVERSE_CHECK_MAX_LENGTH = 20
 
@@ -35,7 +38,7 @@ def generate_cases(
     for scramble_depth in range(1, max_depth + 1):
         scramble_seed = rng.randrange(SCRAMBLE_SEED_LIMIT)
         puzzle.reset(puzzle.solved_states()[0])
-        state, scramble_actions = puzzle.scramble(scramble_depth, scramble_seed)
+        state, scramble_actions = puzzle.scramble(scramble_depth, Random(scramble_seed))
         cases.append(PuzzleCase(state, scramble_depth, scramble_seed, scramble_actions))
 
     return cases
@@ -84,11 +87,21 @@ def main() -> None:
     cases = generate_cases(args.depth, args.seed, puzzle)
     solved_count = 0
 
-    cost_to_go = load_cost_to_go(puzzle, model_path_for(args.puzzle), "cpu")
+    model_path = model_path_for(args.puzzle)
+    if exists(model_path):
+        cost_to_go = load_cost_to_go(puzzle, model_path, "cpu")
+    else:
+        cost_to_go = CostToGo()
 
     for idx, case in enumerate(cases):
         puzzle.reset(case.state)
-        result = solve_a_star(puzzle, cost_to_go, PATH_COST_WEIGHT, args.max_states)
+        result = solve_a_star(
+            puzzle,
+            cost_to_go.batch,
+            PATH_COST_WEIGHT,
+            args.max_states,
+            POP_BATCH_SIZE,
+        )
         if result.solved:
             assert check_valid(case.state, result.actions, puzzle), result
         solved_count += int(result.solved)

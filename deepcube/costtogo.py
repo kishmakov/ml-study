@@ -26,6 +26,9 @@ class CostToGo:
     def __call__(self, state: StateFloat) -> float:
         return 0.0
 
+    def batch(self, states: list[StateFloat]) -> list[float]:
+        return [0.0] * len(states)
+
 
 class ResnetBlock(nn.Module):
     """Two-layer residual block used by the value head."""
@@ -112,6 +115,18 @@ class NeuralCostToGo:
         with torch.no_grad():
             value = self.model(state_tensor)
         return max(float(value.item()), 0.0)
+
+    def batch(self, states: list[StateFloat]) -> list[float]:
+        if not states:
+            return []
+
+        state_array = np.stack(
+            [np.asarray(state, dtype=np.float32) for state in states],
+        )
+        state_tensor = torch.from_numpy(state_array).to(self.device)
+        with torch.no_grad():
+            values = self.model(state_tensor).cpu().numpy()
+        return np.maximum(values, 0.0).astype(np.float32).tolist()
 
 
 def count_params(model: CostToGoNet) -> int:
