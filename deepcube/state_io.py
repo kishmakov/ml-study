@@ -11,11 +11,13 @@ from __future__ import annotations
 from collections.abc import Iterable
 from json import dump, load
 from os import makedirs
-from os.path import splitext
 from time import time
 from typing import Any
 
 import torch
+
+
+_LAST_CTG_EVAL_LOG_TIME = time()
 
 
 # ---------------------------------------------------------------------------
@@ -62,12 +64,10 @@ def save_training_meta(
     config: dict[str, Any],
     progress: dict[str, int | str],
     model_stem: str,
-    started_at: float,
 ) -> None:
     with open(model_stem + ".json", "w", encoding="utf-8") as f:
         dump(
             {
-                "wall_time_sec": time() - started_at,
                 "progress": progress,
                 "config": config,
             },
@@ -82,10 +82,9 @@ def save_training_state(
     config: dict[str, Any],
     progress: dict[str, int | str],
     model_stem: str,
-    started_at: float,
 ) -> None:
     save_training_checkpoint(model, opt, config, progress, model_stem)
-    save_training_meta(config, progress, model_stem, started_at)
+    save_training_meta(config, progress, model_stem)
 
 
 # ---------------------------------------------------------------------------
@@ -125,7 +124,12 @@ def log_until_fit_epoch(epoch: int, loss: float) -> None:
 
 
 def log_ctg_eval(iteration: int, depths: Iterable[Any]) -> None:
+    global _LAST_CTG_EVAL_LOG_TIME
+
+    elapsed = time() - _LAST_CTG_EVAL_LOG_TIME
     print(
-        f"ctg eval iteration={iteration} "
-        f"depths={','.join(str(depth) for depth in depths)}"
+        f"ctg eval iteration={iteration}",
+        f"depths={','.join(str(depth) for depth in depths)}",
+        f"time={elapsed:.2f}s"
     )
+    _LAST_CTG_EVAL_LOG_TIME = time()

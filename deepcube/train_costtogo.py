@@ -10,18 +10,15 @@ from __future__ import annotations
 from argparse import ArgumentParser
 from atexit import register
 from collections import deque
-from concurrent.futures import ProcessPoolExecutor, as_completed
-from multiprocessing import get_context
 from os.path import exists
 from random import Random, seed as set_python_random_seed
-from time import time
-from tqdm import tqdm
 from typing import Any
 
 import numpy as np
 import torch
 
-from costtogo import CostToGoNet, NeuralCostToGo, count_params
+from costtogo import CostToGoNet, count_params
+from daemon.client import CtgZmqClient
 from puzzle import Puzzle, StateKey
 from puzzle_factory import (
     DEFAULT_PUZZLE,
@@ -30,7 +27,6 @@ from puzzle_factory import (
     create_puzzle,
     model_stem_for
 )
-from search_a_star import solve_a_star
 from state_io import (
     ensure_model_dir,
     load_training_checkpoint,
@@ -56,24 +52,19 @@ TARGET_LOSS_THRESHOLD = 0.05
 TARGET_MAX_EPOCHS = 16
 CLOSE_STATE_BASE_REPETITIONS = 32
 
-CTG_EVAL_DEPTHS = ( 5,  7, 10, 13, 15, 17, 20, 30)
-CTG_EVAL_COUNT  = (20, 20, 20, 20, 20, 20, 20, 20)
+# CTG_EVAL_DEPTHS = ( 5,  7, 10, 13, 15, 17, 20, 30)
+# CTG_EVAL_COUNT  = (20, 20, 20, 20, 20, 20, 20, 20)
+
+CTG_EVAL_DEPTHS = ( 5,  7, 10)
+CTG_EVAL_COUNT  = (20, 20, 20)
 
 CTG_EVAL_MAX_STATES = 65_000
 CTG_EVAL_WEIGHT = 0.1
-CTG_EVAL_THREADS = 12
 CTG_EVAL_POP_BATCH_SIZE = 64
 
 TRAIN_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-_CTG_WORKER_PUZZLE_NAME: str | None = None
-_CTG_WORKER_MODEL_PATH: str | None = None
-_CTG_WORKER_MODEL_VERSION: int | None = None
-_CTG_WORKER_PUZZLE: Puzzle | None = None
-_CTG_WORKER_HEURISTIC: NeuralCostToGo | None = None
-_CTG_WORKER_TORCH_CONFIGURED = False
-_CTG_EVAL_EXECUTOR: ProcessPoolExecutor | None = None
-_LAST_CHECKPOINT_TIME: float = time()
+_CTG_EVAL_EXECUTOR: CtgZmqClient | None = None
 
 
 def collect_close_states(
@@ -167,7 +158,6 @@ def train_puzzle_cost_to_go(
 
     ensure_model_dir(MODEL_DIR)
 
-    started_at = time()
     torch.manual_seed(seed)
 
     puzzle = create_puzzle(puzzle_name)
@@ -248,7 +238,6 @@ def train_puzzle_cost_to_go(
         pre_train_epochs,
         batch_size,
         model_stem,
-        started_at,
     )
     progress = run_bellman_phase(
         model,
@@ -268,7 +257,6 @@ def train_puzzle_cost_to_go(
         batch_size,
         eval_batch_size,
         model_stem,
-        started_at,
     )
     finalize_training_state(
         model,
@@ -278,7 +266,6 @@ def train_puzzle_cost_to_go(
         pre_train_epochs,
         bellman_updates,
         model_stem,
-        started_at,
     )
 
     return config
@@ -296,7 +283,6 @@ def run_pretraining_phase(
     pre_train_epochs: int,
     batch_size: int,
     model_stem: str,
-    started_at: float,
 ) -> dict[str, int | str]:
     history = config["history"]
     trained = False
@@ -328,7 +314,6 @@ def run_pretraining_phase(
             config,
             progress,
             model_stem,
-            started_at,
         )
 
     return progress
@@ -352,7 +337,6 @@ def run_bellman_phase(
     batch_size: int,
     eval_batch_size: int,
     model_stem: str,
-    started_at: float,
 ) -> dict[str, int | str]:
     history = config["history"]
     bellman_start = int(progress["bellman_update"])
@@ -410,7 +394,6 @@ def run_bellman_phase(
             config,
             progress,
             model_stem,
-            started_at,
         )
 
     return progress
@@ -422,18 +405,10 @@ def save_checkpoint_then_update_ctg_meta(
     config: dict[str, Any],
     progress: dict[str, int | str],
     model_stem: str,
-    started_at: float,
 ) -> None:
-    global _LAST_CHECKPOINT_TIME
-
     save_training_checkpoint(model, opt, config, progress, model_stem)
     append_ctg_metric(config, progress, model_stem)
-    save_training_meta(config, progress, model_stem, started_at)
-
-    now = time()
-    elapsed = now - _LAST_CHECKPOINT_TIME
-    print(f"Time since last checkpoint: {elapsed:.2f}s")
-    _LAST_CHECKPOINT_TIME = now
+    save_training_meta(config, progress, model_stem)
 
 
 def finalize_training_state(
@@ -443,10 +418,9 @@ def finalize_training_state(
     progress: dict[str, int | str],
     pre_train_epochs: int,
     bellman_updates: int,
-    model_path: str,
-    meta_path: str,
-    started_at: float,
+    model_stem: str,
 ) -> None:
+    meta_path = model_stem + ".json"
     if exists(meta_path) and progress["stage"] == "done":
         return
 
@@ -456,7 +430,7 @@ def finalize_training_state(
         bellman_updates,
         int(progress["seed_offset"]),
     )
-    save_training_state(model, opt, config, progress, model_path, meta_path, started_at)
+    save_training_state(model, opt, config, progress, model_stem)
 
 
 def create_ctg_eval_config(seed: int, puzzle: Puzzle) -> dict[str, Any]:
@@ -485,12 +459,11 @@ def append_ctg_metric(
     }
     model_version = int(metric["iteration"])
     executor = get_ctg_eval_executor()
-    values_by_depth, solved_by_depth = evaluate_ctg_tasks_processes(
+    values_by_depth, solved_by_depth = executor.evaluate(
         config["puzzle"],
         model_stem,
         model_version,
         ctg_eval["bunches"],
-        executor,
         "ctg eval",
     )
 
@@ -510,15 +483,11 @@ def append_ctg_metric(
     log_ctg_eval(metric["iteration"], ctg_eval["bunches"])
 
 
-def get_ctg_eval_executor() -> ProcessPoolExecutor:
+def get_ctg_eval_executor() -> CtgZmqClient:
     global _CTG_EVAL_EXECUTOR
 
     if _CTG_EVAL_EXECUTOR is None:
-        process_context = get_context("spawn")
-        _CTG_EVAL_EXECUTOR = ProcessPoolExecutor(
-            max_workers=CTG_EVAL_THREADS,
-            mp_context=process_context,
-        )
+        _CTG_EVAL_EXECUTOR = CtgZmqClient.start()
 
     return _CTG_EVAL_EXECUTOR
 
@@ -529,123 +498,11 @@ def shutdown_ctg_eval_executor() -> None:
     if _CTG_EVAL_EXECUTOR is None:
         return
 
-    _CTG_EVAL_EXECUTOR.shutdown()
+    _CTG_EVAL_EXECUTOR.close()
     _CTG_EVAL_EXECUTOR = None
 
 
 register(shutdown_ctg_eval_executor)
-
-
-def evaluate_ctg_tasks_processes(
-    puzzle_name: str,
-    model_stem: str,
-    model_version: int,
-    bunches: dict[int | str, list[StateKey]],
-    executor: ProcessPoolExecutor,
-    progress_desc: str,
-) -> tuple[dict[int, list[float]], dict[int, list[int]]]:
-    tasks = [
-        (int(depth), state)
-        for depth, states in bunches.items()
-        for state in states
-    ]
-    if not tasks:
-        return {}, {}
-
-    futures = [
-        executor.submit(
-            evaluate_ctg_task_process,
-            puzzle_name,
-            model_stem,
-            model_version,
-            depth,
-            state,
-        )
-        for depth, state in tasks
-    ]
-
-    values_by_depth: dict[int, list[float]] = {}
-    solved_by_depth: dict[int, list[int]] = {}
-    with tqdm(total=len(tasks), desc=progress_desc, leave=False) as progress_bar:
-        for future in as_completed(futures):
-            depth, value, state_solved = future.result()
-            values_by_depth.setdefault(depth, []).append(value)
-            solved_by_depth.setdefault(depth, []).append(state_solved)
-            progress_bar.update(1)
-
-    total_values = sum(len(values) for values in values_by_depth.values())
-    total_solved = sum(len(solved) for solved in solved_by_depth.values())
-    assert total_values == len(tasks), "CTG evaluation lost value results"
-    assert total_solved == len(tasks), "CTG evaluation lost solved results"
-    return values_by_depth, solved_by_depth
-
-
-def evaluate_ctg_task_process(
-    puzzle_name: str,
-    model_stem: str,
-    model_version: int,
-    depth: int,
-    state: StateKey,
-) -> tuple[int, float, int]:
-    puzzle, heuristic = get_ctg_worker(puzzle_name, model_stem, model_version)
-
-    puzzle.reset(state)
-    value = heuristic(puzzle.cost_to_go_input())
-
-    puzzle.reset(state)
-    result = solve_a_star(
-        puzzle,
-        heuristic.batch,
-        CTG_EVAL_WEIGHT,
-        CTG_EVAL_MAX_STATES,
-        CTG_EVAL_POP_BATCH_SIZE,
-    )
-    return depth, value, int(result.solved)
-
-
-def get_ctg_worker(
-    puzzle_name: str,
-    model_stem: str,
-    model_version: int,
-) -> tuple[Puzzle, NeuralCostToGo]:
-    global _CTG_WORKER_PUZZLE_NAME
-    global _CTG_WORKER_MODEL_PATH
-    global _CTG_WORKER_MODEL_VERSION
-    global _CTG_WORKER_PUZZLE
-    global _CTG_WORKER_HEURISTIC
-
-    configure_ctg_worker_torch()
-    if (
-        _CTG_WORKER_PUZZLE is not None
-        and _CTG_WORKER_HEURISTIC is not None
-        and _CTG_WORKER_PUZZLE_NAME == puzzle_name
-        and _CTG_WORKER_MODEL_PATH == model_stem + ".pt"
-        and _CTG_WORKER_MODEL_VERSION == model_version
-    ):
-        return _CTG_WORKER_PUZZLE, _CTG_WORKER_HEURISTIC
-
-    puzzle = create_puzzle(puzzle_name)
-
-    _CTG_WORKER_PUZZLE_NAME = puzzle_name
-    _CTG_WORKER_MODEL_PATH = model_stem + ".pt"
-    _CTG_WORKER_MODEL_VERSION = model_version
-    _CTG_WORKER_PUZZLE = puzzle
-    _CTG_WORKER_HEURISTIC = NeuralCostToGo.from_checkpoint(model_stem + ".pt", puzzle, "cpu")
-    return _CTG_WORKER_PUZZLE, _CTG_WORKER_HEURISTIC
-
-
-def configure_ctg_worker_torch() -> None:
-    global _CTG_WORKER_TORCH_CONFIGURED
-
-    if _CTG_WORKER_TORCH_CONFIGURED:
-        return
-
-    torch.set_num_threads(1)
-    try:
-        torch.set_num_interop_threads(1)
-    except RuntimeError:
-        pass
-    _CTG_WORKER_TORCH_CONFIGURED = True
 
 
 def reset_epoch_randomness(epoch_seed: int) -> tuple[Random, np.random.Generator]:
