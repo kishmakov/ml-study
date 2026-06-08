@@ -40,12 +40,8 @@ def _normalize_puzzle_name(puzzle_name: str) -> str:
     )
 
 
-def model_path_for(name: str) -> str:
-    return f"{MODEL_DIR}/model_{name.lower()}.pt"
-
-
-def meta_path_for(name: str) -> str:
-    return f"{MODEL_DIR}/meta_{name.lower()}.json"
+def model_stem_for(name: str) -> str:
+    return f"{MODEL_DIR}/model_{name.lower()}"
 
 
 def load_cost_to_go(puzzle: Puzzle, checkpoint_path: str, device: str) -> NeuralCostToGo:

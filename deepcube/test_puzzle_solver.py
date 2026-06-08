@@ -9,7 +9,7 @@ from random import Random
 
 from costtogo import CostToGo
 from puzzle import Puzzle, StateKey
-from puzzle_factory import DEFAULT_PUZZLE, PUZZLE_HELP, create_puzzle, model_path_for, load_cost_to_go
+from puzzle_factory import DEFAULT_PUZZLE, PUZZLE_HELP, create_puzzle, model_stem_for, load_cost_to_go
 from search_a_star import solve_a_star
 
 
@@ -87,7 +87,7 @@ def main() -> None:
     cases = generate_cases(args.depth, args.seed, puzzle)
     solved_count = 0
 
-    model_path = model_path_for(args.puzzle)
+    model_path = model_stem_for(args.puzzle) + ".pt"
     if exists(model_path):
         cost_to_go = load_cost_to_go(puzzle, model_path, "cpu")
     else:

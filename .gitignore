@@ -8,6 +8,7 @@
 *.log
 catboost_info
 
+
 # Data
 *.csv
 
@@ -15,3 +16,4 @@ catboost_info
 cmake-build-debug
 .ipynb_checkpoints
 *.pyc
+tmp

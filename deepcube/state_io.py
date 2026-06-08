@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from json import dump, load
 from os import makedirs
+from os.path import splitext
 from time import time
 from typing import Any
 
@@ -39,7 +40,7 @@ def save_training_checkpoint(
     opt: Any,
     config: dict[str, Any],
     progress: dict[str, int | str],
-    model_path: str,
+    model_stem: str,
 ) -> None:
     checkpoint = {
         "state_dict": model.state_dict(),
@@ -47,20 +48,25 @@ def save_training_checkpoint(
         "config": config,
         "progress": progress,
     }
-    torch.save(checkpoint, model_path)
+    was_training = model.training
+    model.eval()
+    try:
+        torch.save(checkpoint, model_stem + ".pt")
+        scripted = torch.jit.script(model)
+        scripted.save(model_stem + ".torchscript")
+    finally:
+        model.train(was_training)
 
 
 def save_training_meta(
     config: dict[str, Any],
     progress: dict[str, int | str],
-    model_path: str,
-    meta_path: str,
+    model_stem: str,
     started_at: float,
 ) -> None:
-    with open(meta_path, "w", encoding="utf-8") as f:
+    with open(model_stem + ".json", "w", encoding="utf-8") as f:
         dump(
             {
-                "model_path": model_path,
                 "wall_time_sec": time() - started_at,
                 "progress": progress,
                 "config": config,
@@ -75,12 +81,11 @@ def save_training_state(
     opt: Any,
     config: dict[str, Any],
     progress: dict[str, int | str],
-    model_path: str,
-    meta_path: str,
+    model_stem: str,
     started_at: float,
 ) -> None:
-    save_training_checkpoint(model, opt, config, progress, model_path)
-    save_training_meta(config, progress, model_path, meta_path, started_at)
+    save_training_checkpoint(model, opt, config, progress, model_stem)
+    save_training_meta(config, progress, model_stem, started_at)
 
 
 # ---------------------------------------------------------------------------

@@ -38,7 +38,7 @@ class ResnetBlock(nn.Module):
         self.fc1 = nn.Linear(dim, dim)
         self.fc2 = nn.Linear(dim, dim)
 
-    def forward(self, x: Any) -> Any:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         residual = x
         x = self.fc1(x)
         x = F.relu(x)
@@ -76,7 +76,7 @@ class CostToGoNet(nn.Module):
             VALUE_NET_NUM_RESNET_BLOCKS,
         )
 
-    def forward(self, state: Any) -> Any:
+    def forward(self, state: torch.Tensor) -> torch.Tensor:
         if state.ndim == 1:
             state = state.unsqueeze(0)
         assert state.shape[1] == self.input_size, (

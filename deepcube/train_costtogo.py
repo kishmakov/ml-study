@@ -28,8 +28,7 @@ from puzzle_factory import (
     MODEL_DIR,
     PUZZLE_HELP,
     create_puzzle,
-    model_path_for,
-    meta_path_for,
+    model_stem_for
 )
 from search_a_star import solve_a_star
 from state_io import (
@@ -59,7 +58,6 @@ CLOSE_STATE_BASE_REPETITIONS = 32
 
 CTG_EVAL_DEPTHS = ( 5,  7, 10, 13, 15, 17, 20, 30)
 CTG_EVAL_COUNT  = (20, 20, 20, 20, 20, 20, 20, 20)
-
 
 CTG_EVAL_MAX_STATES = 65_000
 CTG_EVAL_WEIGHT = 0.1
@@ -176,8 +174,7 @@ def train_puzzle_cost_to_go(
     input_size = len(puzzle.cost_to_go_input())
     model = CostToGoNet.from_puzzle(puzzle).to(TRAIN_DEVICE)
     opt = torch.optim.Adam(model.parameters(), lr=lr)
-    model_path = model_path_for(puzzle_name)
-    meta_path = meta_path_for(puzzle_name)
+    model_stem = model_stem_for(puzzle_name)
     history: list[dict[str, float | int | str]] = []
     progress = _initial_progress()
 
@@ -208,6 +205,7 @@ def train_puzzle_cost_to_go(
         "history": history,
     }
 
+    meta_path = model_stem + ".json"
     if exists(meta_path):
         meta = load_training_meta(meta_path)
         assert "progress" in meta, f"invalid meta without progress: {meta_path}"
@@ -216,10 +214,9 @@ def train_puzzle_cost_to_go(
         )
         config["ctg_eval"] = meta["config"]["ctg_eval"]
         _assert_resume_config(meta["config"], config)
-        checkpoint_path = meta.get("model_path", model_path)
-        assert exists(checkpoint_path), (
-            f"training checkpoint not found at {checkpoint_path}"
-        )
+        checkpoint_path = model_stem + ".pt"
+        assert exists(checkpoint_path), f"checkpoint not found at {checkpoint_path}"
+
         checkpoint = load_training_checkpoint(checkpoint_path, TRAIN_DEVICE)
         assert "state_dict" in checkpoint, f"invalid checkpoint: {checkpoint_path}"
         assert "optimizer_state_dict" in checkpoint, (
@@ -250,8 +247,7 @@ def train_puzzle_cost_to_go(
         seed,
         pre_train_epochs,
         batch_size,
-        model_path,
-        meta_path,
+        model_stem,
         started_at,
     )
     progress = run_bellman_phase(
@@ -271,8 +267,7 @@ def train_puzzle_cost_to_go(
         target_max_epochs,
         batch_size,
         eval_batch_size,
-        model_path,
-        meta_path,
+        model_stem,
         started_at,
     )
     finalize_training_state(
@@ -282,8 +277,7 @@ def train_puzzle_cost_to_go(
         progress,
         pre_train_epochs,
         bellman_updates,
-        model_path,
-        meta_path,
+        model_stem,
         started_at,
     )
 
@@ -301,8 +295,7 @@ def run_pretraining_phase(
     seed: int,
     pre_train_epochs: int,
     batch_size: int,
-    model_path: str,
-    meta_path: str,
+    model_stem: str,
     started_at: float,
 ) -> dict[str, int | str]:
     history = config["history"]
@@ -334,8 +327,7 @@ def run_pretraining_phase(
             opt,
             config,
             progress,
-            model_path,
-            meta_path,
+            model_stem,
             started_at,
         )
 
@@ -359,8 +351,7 @@ def run_bellman_phase(
     target_max_epochs: int,
     batch_size: int,
     eval_batch_size: int,
-    model_path: str,
-    meta_path: str,
+    model_stem: str,
     started_at: float,
 ) -> dict[str, int | str]:
     history = config["history"]
@@ -418,8 +409,7 @@ def run_bellman_phase(
             opt,
             config,
             progress,
-            model_path,
-            meta_path,
+            model_stem,
             started_at,
         )
 
@@ -431,15 +421,14 @@ def save_checkpoint_then_update_ctg_meta(
     opt: Any,
     config: dict[str, Any],
     progress: dict[str, int | str],
-    model_path: str,
-    meta_path: str,
+    model_stem: str,
     started_at: float,
 ) -> None:
     global _LAST_CHECKPOINT_TIME
 
-    save_training_checkpoint(model, opt, config, progress, model_path)
-    append_ctg_metric(config, progress, model_path)
-    save_training_meta(config, progress, model_path, meta_path, started_at)
+    save_training_checkpoint(model, opt, config, progress, model_stem)
+    append_ctg_metric(config, progress, model_stem)
+    save_training_meta(config, progress, model_stem, started_at)
 
     now = time()
     elapsed = now - _LAST_CHECKPOINT_TIME
@@ -486,7 +475,7 @@ def create_ctg_eval_config(seed: int, puzzle: Puzzle) -> dict[str, Any]:
 def append_ctg_metric(
     config: dict[str, Any],
     progress: dict[str, int | str],
-    model_path: str,
+    model_stem: str,
 ) -> None:
     ctg_eval = config["ctg_eval"]
     metric = {
@@ -498,7 +487,7 @@ def append_ctg_metric(
     executor = get_ctg_eval_executor()
     values_by_depth, solved_by_depth = evaluate_ctg_tasks_processes(
         config["puzzle"],
-        model_path,
+        model_stem,
         model_version,
         ctg_eval["bunches"],
         executor,
@@ -549,7 +538,7 @@ register(shutdown_ctg_eval_executor)
 
 def evaluate_ctg_tasks_processes(
     puzzle_name: str,
-    model_path: str,
+    model_stem: str,
     model_version: int,
     bunches: dict[int | str, list[StateKey]],
     executor: ProcessPoolExecutor,
@@ -567,7 +556,7 @@ def evaluate_ctg_tasks_processes(
         executor.submit(
             evaluate_ctg_task_process,
             puzzle_name,
-            model_path,
+            model_stem,
             model_version,
             depth,
             state,
@@ -593,12 +582,12 @@ def evaluate_ctg_tasks_processes(
 
 def evaluate_ctg_task_process(
     puzzle_name: str,
-    model_path: str,
+    model_stem: str,
     model_version: int,
     depth: int,
     state: StateKey,
 ) -> tuple[int, float, int]:
-    puzzle, heuristic = get_ctg_worker(puzzle_name, model_path, model_version)
+    puzzle, heuristic = get_ctg_worker(puzzle_name, model_stem, model_version)
 
     puzzle.reset(state)
     value = heuristic(puzzle.cost_to_go_input())
@@ -616,7 +605,7 @@ def evaluate_ctg_task_process(
 
 def get_ctg_worker(
     puzzle_name: str,
-    model_path: str,
+    model_stem: str,
     model_version: int,
 ) -> tuple[Puzzle, NeuralCostToGo]:
     global _CTG_WORKER_PUZZLE_NAME
@@ -630,7 +619,7 @@ def get_ctg_worker(
         _CTG_WORKER_PUZZLE is not None
         and _CTG_WORKER_HEURISTIC is not None
         and _CTG_WORKER_PUZZLE_NAME == puzzle_name
-        and _CTG_WORKER_MODEL_PATH == model_path
+        and _CTG_WORKER_MODEL_PATH == model_stem + ".pt"
         and _CTG_WORKER_MODEL_VERSION == model_version
     ):
         return _CTG_WORKER_PUZZLE, _CTG_WORKER_HEURISTIC
@@ -638,10 +627,10 @@ def get_ctg_worker(
     puzzle = create_puzzle(puzzle_name)
 
     _CTG_WORKER_PUZZLE_NAME = puzzle_name
-    _CTG_WORKER_MODEL_PATH = model_path
+    _CTG_WORKER_MODEL_PATH = model_stem + ".pt"
     _CTG_WORKER_MODEL_VERSION = model_version
     _CTG_WORKER_PUZZLE = puzzle
-    _CTG_WORKER_HEURISTIC = NeuralCostToGo.from_checkpoint(model_path, puzzle, "cpu")
+    _CTG_WORKER_HEURISTIC = NeuralCostToGo.from_checkpoint(model_stem + ".pt", puzzle, "cpu")
     return _CTG_WORKER_PUZZLE, _CTG_WORKER_HEURISTIC
 
 
