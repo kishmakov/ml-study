@@ -10,7 +10,7 @@ from random import Random
 from costtogo import CostToGo
 from puzzle import Puzzle, StateKey
 from puzzle_factory import DEFAULT_PUZZLE, PUZZLE_HELP, create_puzzle, model_stem_for, load_cost_to_go
-from search_a_star import solve_a_star
+from search.a_star import a_star_search
 
 
 SCRAMBLE_SEED_LIMIT = 2**32
@@ -95,7 +95,7 @@ def main() -> None:
 
     for idx, case in enumerate(cases):
         puzzle.reset(case.state)
-        result = solve_a_star(
+        result = a_star_search(
             puzzle,
             cost_to_go.batch,
             PATH_COST_WEIGHT,

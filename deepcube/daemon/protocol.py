@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 TASK = "TASK"
 UPDATE = "UPDATE"
+UPDATED = "UPDATED"
 RESULT = "RESULT"
 ERROR = "ERROR"
 READY = "READY"
@@ -130,3 +131,7 @@ def decode_error(raw: str) -> ErrorMessage:
 
 def encode_ready(worker_id: str) -> str:
     return "\t".join((READY, worker_id))
+
+
+def encode_updated(worker_id: str, model_version: int) -> str:
+    return "\t".join((UPDATED, worker_id, str(model_version)))

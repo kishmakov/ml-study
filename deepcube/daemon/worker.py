@@ -16,7 +16,7 @@ import zmq
 from costtogo import NeuralCostToGo
 from puzzle import Puzzle
 from puzzle_factory import create_puzzle
-from search_a_star import solve_a_star
+from search.a_star import a_star_search
 from train_costtogo import (
     CTG_EVAL_MAX_STATES,
     CTG_EVAL_POP_BATCH_SIZE,
@@ -35,6 +35,7 @@ from daemon.protocol import (
     encode_error,
     encode_ready,
     encode_result,
+    encode_updated,
 )
 
 
@@ -73,7 +74,7 @@ class WorkerState:
         value = self.heuristic(self.puzzle.cost_to_go_input())
 
         self.puzzle.reset(task.state)
-        result = solve_a_star(
+        result = a_star_search(
             self.puzzle,
             self.heuristic.batch,
             CTG_EVAL_WEIGHT,
@@ -89,7 +90,7 @@ class WorkerState:
         )
 
 
-def run_worker(task_endpoint: str, update_endpoint: str, result_endpoint: str) -> None:
+def run_worker(worker_endpoint: str) -> None:
     torch.set_num_threads(1)
     try:
         torch.set_num_interop_threads(1)
@@ -97,66 +98,54 @@ def run_worker(task_endpoint: str, update_endpoint: str, result_endpoint: str) -
         pass
 
     context = zmq.Context.instance()
-    tasks = context.socket(zmq.PULL)
-    tasks.connect(task_endpoint)
-
-    updates = context.socket(zmq.SUB)
-    updates.setsockopt_string(zmq.SUBSCRIBE, "")
-    updates.connect(update_endpoint)
-
-    results = context.socket(zmq.PUSH)
-    results.connect(result_endpoint)
-    results.send_string(encode_ready(str(getpid())))
+    worker = context.socket(zmq.DEALER)
+    worker.connect(worker_endpoint)
+    worker_id = str(getpid())
+    worker.send_string(encode_ready(worker_id))
 
     poller = zmq.Poller()
-    poller.register(tasks, zmq.POLLIN)
-    poller.register(updates, zmq.POLLIN)
+    poller.register(worker, zmq.POLLIN)
 
     state = WorkerState()
     try:
         while True:
             events = dict(poller.poll())
-            if updates in events:
-                raw = updates.recv_string()
-                if raw == STOP:
+            if worker in events:
+                raw = worker.recv_string()
+                command = raw.split("\t", 1)[0]
+                if command == STOP:
                     break
-                if raw.startswith(UPDATE + "\t"):
+                if command == UPDATE:
                     update = decode_update(raw)
                     state.load(
                         update.puzzle_name,
                         update.model_stem,
                         update.model_version,
                     )
-
-            if tasks in events:
-                raw = tasks.recv_string()
-                if raw == STOP:
-                    break
-                assert raw.startswith(TASK + "\t"), f"invalid worker task: {raw!r}"
-                task = decode_task(raw)
-                try:
-                    results.send_string(encode_result(state.evaluate(task)))
-                except Exception:
-                    results.send_string(
-                        encode_error(
-                            ErrorMessage(task.client_id, task.task_id, format_exc())
+                    worker.send_string(encode_updated(worker_id, update.model_version))
+                elif command == TASK:
+                    task = decode_task(raw)
+                    try:
+                        worker.send_string(encode_result(state.evaluate(task)))
+                    except Exception:
+                        worker.send_string(
+                            encode_error(
+                                ErrorMessage(task.client_id, task.task_id, format_exc())
+                            )
                         )
-                    )
+                else:
+                    raise AssertionError(f"invalid worker command: {raw!r}")
     except KeyboardInterrupt:
         pass
 
-    tasks.close(linger=0)
-    updates.close(linger=0)
-    results.close(linger=0)
+    worker.close(linger=0)
 
 
 def main() -> None:
     parser = ArgumentParser()
-    parser.add_argument("--task-endpoint", required=True)
-    parser.add_argument("--update-endpoint", required=True)
-    parser.add_argument("--result-endpoint", required=True)
+    parser.add_argument("--worker-endpoint", required=True)
     args = parser.parse_args()
-    run_worker(args.task_endpoint, args.update_endpoint, args.result_endpoint)
+    run_worker(args.worker_endpoint)
 
 
 if __name__ == "__main__":

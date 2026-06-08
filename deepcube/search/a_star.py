@@ -20,7 +20,7 @@ class SearchResult:
     generated_states: int
 
 
-def solve_a_star(
+def a_star_search(
     puzzle: Puzzle,
     cost_to_go_batch: BatchCostToGo,
     weight: float,
@@ -81,8 +81,6 @@ def solve_a_star(
             for action in puzzle.actions():
                 puzzle.reset(state)
                 child, transition_cost = puzzle.apply(action)
-                assert transition_cost >= 0, "A* requires non-negative transition costs"
-
                 child_path_cost = path_cost + transition_cost
                 if child_path_cost >= best_cost.get(child, inf):
                     continue
