@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from os.path import join
+from os.path import dirname, exists, join
 from shutil import rmtree
 from subprocess import DEVNULL, Popen, TimeoutExpired
-from sys import executable
 from tempfile import mkdtemp
 from uuid import uuid4
 
@@ -31,6 +30,7 @@ from daemon.protocol import (
 
 DEFAULT_TIMEOUT_MS = 30 * 60 * 1000
 DEFAULT_WORKERS = 12
+NATIVE_WORKER = join(dirname(__file__), "worker")
 
 
 class CtgZmqClient:
@@ -222,14 +222,14 @@ def start_local_workers(
     workers: int,
     worker_endpoint: str,
 ) -> list[Popen[str]]:
+    assert exists(NATIVE_WORKER), "native worker is missing; run ./build_native.sh"
+
     processes: list[Popen[str]] = []
     for _ in range(workers):
         processes.append(
             Popen(
                 [
-                    executable,
-                    "-m",
-                    "daemon.worker",
+                    NATIVE_WORKER,
                     "--worker-endpoint",
                     worker_endpoint,
                 ],
