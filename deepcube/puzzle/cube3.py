@@ -18,7 +18,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from puzzle import Puzzle, StateFloat, StateKey
+from puzzle.puzzle import Puzzle, StateFloat, StateKey
 
 
 # ---------------------------------------------------------------------------

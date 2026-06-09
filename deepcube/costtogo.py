@@ -12,7 +12,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from puzzle import Puzzle, StateFloat
+from puzzle.puzzle import Puzzle, StateFloat
 
 
 VALUE_NET_HIDDEN_DIM = 512

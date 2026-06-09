@@ -11,7 +11,7 @@ from uuid import uuid4
 from tqdm import tqdm
 import zmq
 
-from puzzle import StateKey
+from puzzle.puzzle import StateKey
 from puzzle_factory import MODEL_DIR
 
 from daemon.protocol import (
@@ -55,13 +55,12 @@ class CtgZmqClient:
 
     @classmethod
     def start(cls) -> "CtgZmqClient":
-        endpoint_dir = mkdtemp(prefix="communication", dir=MODEL_DIR)
-        worker_endpoint = _ipc_endpoint(endpoint_dir, "workers.sock")
+        worker_endpoint = _ipc_endpoint(MODEL_DIR, "workers.sock")
         client = cls(
             worker_endpoint,
             DEFAULT_TIMEOUT_MS,
             [],
-            endpoint_dir,
+            MODEL_DIR,
         )
         client.managed_workers = start_local_workers(
             DEFAULT_WORKERS,
@@ -213,9 +212,7 @@ class CtgZmqClient:
         self.workers.close(linger=0)
         stop_local_workers(self.managed_workers)
         self.managed_workers = []
-        if self.endpoint_dir is not None:
-            rmtree(self.endpoint_dir, ignore_errors=True)
-            self.endpoint_dir = None
+        self.endpoint_dir = None
 
 
 def start_local_workers(

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from re import fullmatch
 
-from cube3 import Cube3
-from n_puzzle import NPuzzle
-from puzzle import Puzzle
+from puzzle.cube3 import Cube3
+from puzzle.n_puzzle import NPuzzle
+from puzzle.puzzle import Puzzle
 from costtogo import NeuralCostToGo
 
 
