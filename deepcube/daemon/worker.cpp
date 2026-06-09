@@ -1,15 +1,14 @@
 #include <zmq.h>
 
+#include "costtogo.hpp"
 #include "puzzle/environment.hpp"
+#include "search/a_star.hpp"
 
 #include <atomic>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdlib>
 #include <exception>
-#include <fstream>
-#include <iomanip>
-#include <iostream>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -32,6 +31,9 @@ constexpr const char* kResult = "RESULT";
 constexpr const char* kError = "ERROR";
 constexpr const char* kReady = "READY";
 constexpr const char* kStop = "STOP";
+constexpr float kCtgEvalWeight = 0.1F;
+constexpr int kCtgEvalMaxStates = 65000;
+constexpr int kCtgEvalPopBatchSize = 4;
 
 struct Task {
     std::string client_id;
@@ -57,6 +59,50 @@ struct Result {
     int solved = 0;
     bool failed = false;
     std::string error_message;
+};
+
+class WorkerState {
+public:
+    void load(const Update& update) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (
+            heuristic_ != nullptr
+            && puzzle_name_ == update.puzzle_name
+            && model_stem_ == update.model_stem
+            && model_version_ == update.model_version
+        ) {
+            return;
+        }
+
+        heuristic_ = std::make_shared<deepcube::costtogo::TorchScriptCostToGo>(
+            update.model_stem + ".torchscript"
+        );
+        puzzle_name_ = update.puzzle_name;
+        model_stem_ = update.model_stem;
+        model_version_ = update.model_version;
+    }
+
+    std::shared_ptr<const deepcube::search::CostToGo> heuristicFor(const Task& task) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (heuristic_ == nullptr) {
+            throw std::runtime_error("worker model was not loaded");
+        }
+        if (
+            puzzle_name_ != task.puzzle_name
+            || model_stem_ != task.model_stem
+            || model_version_ != task.model_version
+        ) {
+            throw std::runtime_error("worker model does not match task model");
+        }
+        return heuristic_;
+    }
+
+private:
+    mutable std::mutex mutex_;
+    std::string puzzle_name_;
+    std::string model_stem_;
+    int model_version_ = 0;
+    std::shared_ptr<const deepcube::search::CostToGo> heuristic_;
 };
 
 template <typename T>
@@ -200,11 +246,6 @@ std::string encode_model_input(const std::vector<float>& input) {
     return encoded.str();
 }
 
-void append_model_input(const std::vector<float>& input) {
-    std::ofstream queries("/tmp/cube/queries.txt", std::ios::app);
-    queries << encode_model_input(input) << '\n';
-}
-
 std::string zmq_error(const std::string& action) {
     return action + ": " + zmq_strerror(zmq_errno());
 }
@@ -237,9 +278,15 @@ void send_string(void* socket, const std::string& value) {
 
 class WorkerPool {
 public:
-    WorkerPool(std::size_t thread_count, BlockingQueue<Task>& tasks, BlockingQueue<Result>& results)
+    WorkerPool(
+        std::size_t thread_count,
+        BlockingQueue<Task>& tasks,
+        BlockingQueue<Result>& results,
+        const WorkerState& worker_state
+    )
         : tasks_(tasks),
-          results_(results) {
+          results_(results),
+          worker_state_(worker_state) {
         workers_.reserve(thread_count);
         for (std::size_t i = 0; i < thread_count; ++i) {
             workers_.emplace_back([this] {
@@ -274,21 +321,30 @@ private:
             }
 
             try {
+                const std::shared_ptr<const deepcube::search::CostToGo> heuristic =
+                    worker_state_.heuristicFor(*task);
                 const std::unique_ptr<deepcube::puzzle::Environment> puzzle =
                     deepcube::puzzle::createEnvironment(task->puzzle_name, task->state);
                 const std::vector<float> input = puzzle->costToGoInput();
-
-                {
-                    std::lock_guard<std::mutex> lock(output_mutex_);
-                    append_model_input(input);
+                const std::vector<float> values = heuristic->batch({input});
+                if (values.size() != 1) {
+                    throw std::runtime_error("cost-to-go returned wrong result count");
                 }
+
+                deepcube::search::SearchResult search_result = deepcube::search::aStarSearch(
+                    deepcube::puzzle::createEnvironment(task->puzzle_name, task->state),
+                    *heuristic,
+                    kCtgEvalWeight,
+                    kCtgEvalMaxStates,
+                    kCtgEvalPopBatchSize
+                );
 
                 results_.push(Result{
                     task->client_id,
                     task->task_id,
                     task->depth,
-                    0.0,
-                    0,
+                    values[0],
+                    search_result.solved ? 1 : 0,
                     false,
                     "",
                 });
@@ -306,6 +362,7 @@ private:
 
     BlockingQueue<Task>& tasks_;
     BlockingQueue<Result>& results_;
+    const WorkerState& worker_state_;
     std::vector<std::thread> workers_;
     std::mutex output_mutex_;
     std::atomic<bool> stopped_{false};
@@ -316,7 +373,7 @@ public:
     ZmqWorker(std::string worker_endpoint, std::size_t worker_count)
         : worker_endpoint_(std::move(worker_endpoint)),
           worker_id_(std::to_string(getpid())),
-          workers_(worker_count, tasks_, results_) {}
+          workers_(worker_count, tasks_, results_, worker_state_) {}
 
     ~ZmqWorker() {
         stop();
@@ -374,6 +431,7 @@ public:
             }
             if (command == kUpdate) {
                 const Update update = decode_update(raw);
+                worker_state_.load(update);
                 send_string(socket_, encode_updated(worker_id_, update.model_version));
             } else if (command == kTask) {
                 try {
@@ -409,6 +467,7 @@ private:
 
     BlockingQueue<Task> tasks_;
     BlockingQueue<Result> results_;
+    WorkerState worker_state_;
     WorkerPool workers_;
 
     void* context_ = nullptr;
