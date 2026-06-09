@@ -110,7 +110,7 @@ public:
 
     std::vector<std::unique_ptr<Environment>> getNextStates() const override {
         std::vector<std::unique_ptr<Environment>> states;
-        for (int action : actions()) {
+        for (int action : getActions()) {
             states.push_back(getNextState(action));
         }
         return states;
@@ -129,21 +129,7 @@ public:
         return input;
     }
 
-    bool isSolved() const override {
-        for (int i = 0; i < num_tiles_ - 1; ++i) {
-            if (state_[i] != i + 1) {
-                return false;
-            }
-        }
-        return state_.back() == 0;
-    }
-
-    int getNumActions() const override {
-        return 4;
-    }
-
-private:
-    std::vector<int> actions() const {
+    std::vector<int> getActions() const override {
         std::vector<int> output;
         const int row = z_idx_ / dim_;
         const int col = z_idx_ % dim_;
@@ -162,6 +148,20 @@ private:
         return output;
     }
 
+    bool isSolved() const override {
+        for (int i = 0; i < num_tiles_ - 1; ++i) {
+            if (state_[i] != i + 1) {
+                return false;
+            }
+        }
+        return state_.back() == 0;
+    }
+
+    int getNumActions() const override {
+        return 4;
+    }
+
+private:
     NPuzzle nextState(int action) const {
         int swap_idx = z_idx_;
         const int row = z_idx_ / dim_;
@@ -272,7 +272,7 @@ public:
     std::vector<std::unique_ptr<Environment>> getNextStates() const override {
         std::vector<std::unique_ptr<Environment>> states;
         states.reserve(kNumActions);
-        for (int action = 0; action < kNumActions; ++action) {
+        for (int action : getActions()) {
             states.push_back(getNextState(action));
         }
         return states;
@@ -295,6 +295,15 @@ public:
             input[i * 6 + colors[i]] = 1.0F;
         }
         return input;
+    }
+
+    std::vector<int> getActions() const override {
+        std::vector<int> actions;
+        actions.reserve(kNumActions);
+        for (int action = 0; action < kNumActions; ++action) {
+            actions.push_back(action);
+        }
+        return actions;
     }
 
     bool isSolved() const override {

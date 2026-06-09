@@ -15,6 +15,7 @@ public:
     virtual std::vector<std::unique_ptr<Environment>> getNextStates() const = 0;
     virtual std::vector<uint8_t> getState() const = 0;
     virtual std::vector<float> costToGoInput() const = 0;
+    virtual std::vector<int> getActions() const = 0;
     virtual bool isSolved() const = 0;
     virtual int getNumActions() const = 0;
 };
