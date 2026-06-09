@@ -16,6 +16,9 @@ public:
     virtual std::vector<uint8_t> getState() const = 0;
     virtual std::vector<float> costToGoInput() const = 0;
     virtual std::vector<int> getActions() const = 0;
+    virtual void getActions(std::vector<int>& actions) const {
+        actions = getActions();
+    }
     virtual bool isSolved() const = 0;
     virtual int getNumActions() const = 0;
 };

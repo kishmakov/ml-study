@@ -148,6 +148,24 @@ public:
         return output;
     }
 
+    void getActions(std::vector<int>& actions) const override {
+        actions.clear();
+        const int row = z_idx_ / dim_;
+        const int col = z_idx_ % dim_;
+        if (row < dim_ - 1) {
+            actions.push_back(0);
+        }
+        if (row > 0) {
+            actions.push_back(1);
+        }
+        if (col < dim_ - 1) {
+            actions.push_back(2);
+        }
+        if (col > 0) {
+            actions.push_back(3);
+        }
+    }
+
     bool isSolved() const override {
         for (int i = 0; i < num_tiles_ - 1; ++i) {
             if (state_[i] != i + 1) {
@@ -162,6 +180,14 @@ public:
     }
 
 private:
+    struct AssumeValid {};
+
+    NPuzzle(std::vector<uint8_t> state, uint8_t dim, int z_idx, AssumeValid)
+        : state_(std::move(state)),
+          dim_(dim),
+          num_tiles_(dim_ * dim_),
+          z_idx_(z_idx) {}
+
     NPuzzle nextState(int action) const {
         int swap_idx = z_idx_;
         const int row = z_idx_ / dim_;
@@ -193,7 +219,7 @@ private:
 
         std::vector<uint8_t> next = state_;
         std::swap(next[z_idx_], next[swap_idx]);
-        return NPuzzle(std::move(next), dim_);
+        return NPuzzle(std::move(next), dim_, swap_idx, AssumeValid{});
     }
 
     void validate() const {
@@ -306,17 +332,21 @@ public:
         return actions;
     }
 
+    void getActions(std::vector<int>& actions) const override {
+        actions.clear();
+        actions.reserve(kNumActions);
+        for (int action = 0; action < kNumActions; ++action) {
+            actions.push_back(action);
+        }
+    }
+
     bool isSolved() const override {
-        const std::array<uint8_t, 54> colors = faceColors();
-        for (int face = 0; face < 6; ++face) {
-            const uint8_t color = colors[face * 9];
-            for (int offset = 1; offset < 9; ++offset) {
-                if (colors[face * 9 + offset] != color) {
-                    return false;
-                }
+        for (const Cube3State& solved_state : solvedStates()) {
+            if (state_ == solved_state) {
+                return true;
             }
         }
-        return true;
+        return false;
     }
 
     int getNumActions() const override {
@@ -324,7 +354,162 @@ public:
     }
 
 private:
+    struct AssumeValid {};
+
+    Cube3(Cube3State state, AssumeValid)
+        : state_(std::move(state)) {}
+
     static constexpr int kNumActions = 12;
+
+    static const std::array<Cube3State, 24>& solvedStates() {
+        static const std::array<Cube3State, 24> states{{
+            Cube3State{
+                {{2, 0, 3, 1, 5, 7, 4, 6}},
+                {{0, 0, 0, 0, 0, 0, 0, 0}},
+                {{1, 3, 0, 2, 6, 4, 7, 5, 9, 10, 11, 8}},
+                {{0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1}},
+            },
+            Cube3State{
+                {{1, 3, 0, 2, 6, 4, 7, 5}},
+                {{0, 0, 0, 0, 0, 0, 0, 0}},
+                {{2, 0, 3, 1, 5, 7, 4, 6, 11, 8, 9, 10}},
+                {{0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1}},
+            },
+            Cube3State{
+                {{3, 2, 1, 0, 7, 6, 5, 4}},
+                {{0, 0, 0, 0, 0, 0, 0, 0}},
+                {{3, 2, 1, 0, 7, 6, 5, 4, 10, 11, 8, 9}},
+                {{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},
+            },
+            Cube3State{
+                {{0, 1, 2, 3, 4, 5, 6, 7}},
+                {{0, 0, 0, 0, 0, 0, 0, 0}},
+                {{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}},
+                {{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},
+            },
+            Cube3State{
+                {{5, 7, 4, 6, 2, 0, 3, 1}},
+                {{0, 0, 0, 0, 0, 0, 0, 0}},
+                {{6, 4, 7, 5, 1, 3, 0, 2, 10, 9, 8, 11}},
+                {{0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1}},
+            },
+            Cube3State{
+                {{6, 4, 7, 5, 1, 3, 0, 2}},
+                {{0, 0, 0, 0, 0, 0, 0, 0}},
+                {{5, 7, 4, 6, 2, 0, 3, 1, 8, 11, 10, 9}},
+                {{0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1}},
+            },
+            Cube3State{
+                {{4, 5, 6, 7, 0, 1, 2, 3}},
+                {{0, 0, 0, 0, 0, 0, 0, 0}},
+                {{4, 5, 6, 7, 0, 1, 2, 3, 9, 8, 11, 10}},
+                {{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},
+            },
+            Cube3State{
+                {{7, 6, 5, 4, 3, 2, 1, 0}},
+                {{0, 0, 0, 0, 0, 0, 0, 0}},
+                {{7, 6, 5, 4, 3, 2, 1, 0, 11, 10, 9, 8}},
+                {{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},
+            },
+            Cube3State{
+                {{0, 2, 5, 7, 3, 1, 6, 4}},
+                {{2, 1, 1, 2, 2, 1, 1, 2}},
+                {{1, 9, 10, 6, 2, 11, 8, 5, 3, 0, 4, 7}},
+                {{1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0}},
+            },
+            Cube3State{
+                {{3, 1, 6, 4, 0, 2, 5, 7}},
+                {{2, 1, 1, 2, 2, 1, 1, 2}},
+                {{2, 11, 8, 5, 1, 9, 10, 6, 0, 3, 7, 4}},
+                {{1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0}},
+            },
+            Cube3State{
+                {{1, 0, 4, 5, 2, 3, 7, 6}},
+                {{2, 1, 1, 2, 2, 1, 1, 2}},
+                {{0, 8, 9, 4, 3, 10, 11, 7, 1, 2, 5, 6}},
+                {{1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0}},
+            },
+            Cube3State{
+                {{2, 3, 7, 6, 1, 0, 4, 5}},
+                {{2, 1, 1, 2, 2, 1, 1, 2}},
+                {{3, 10, 11, 7, 0, 8, 9, 4, 2, 1, 6, 5}},
+                {{1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0}},
+            },
+            Cube3State{
+                {{7, 5, 2, 0, 4, 6, 1, 3}},
+                {{2, 1, 1, 2, 2, 1, 1, 2}},
+                {{6, 10, 9, 1, 5, 8, 11, 2, 4, 7, 3, 0}},
+                {{1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0}},
+            },
+            Cube3State{
+                {{4, 6, 1, 3, 7, 5, 2, 0}},
+                {{2, 1, 1, 2, 2, 1, 1, 2}},
+                {{5, 8, 11, 2, 6, 10, 9, 1, 7, 4, 0, 3}},
+                {{1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0}},
+            },
+            Cube3State{
+                {{6, 7, 3, 2, 5, 4, 0, 1}},
+                {{2, 1, 1, 2, 2, 1, 1, 2}},
+                {{7, 11, 10, 3, 4, 9, 8, 0, 6, 5, 2, 1}},
+                {{1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0}},
+            },
+            Cube3State{
+                {{5, 4, 0, 1, 6, 7, 3, 2}},
+                {{2, 1, 1, 2, 2, 1, 1, 2}},
+                {{4, 9, 8, 0, 7, 11, 10, 3, 5, 6, 1, 2}},
+                {{1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0}},
+            },
+            Cube3State{
+                {{5, 0, 7, 2, 1, 4, 3, 6}},
+                {{1, 2, 2, 1, 1, 2, 2, 1}},
+                {{9, 6, 1, 10, 8, 2, 5, 11, 0, 4, 7, 3}},
+                {{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}},
+            },
+            Cube3State{
+                {{6, 3, 4, 1, 2, 7, 0, 5}},
+                {{1, 2, 2, 1, 1, 2, 2, 1}},
+                {{11, 5, 2, 8, 10, 1, 6, 9, 3, 7, 4, 0}},
+                {{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}},
+            },
+            Cube3State{
+                {{7, 2, 6, 3, 0, 5, 1, 4}},
+                {{1, 2, 2, 1, 1, 2, 2, 1}},
+                {{10, 7, 3, 11, 9, 0, 4, 8, 1, 6, 5, 2}},
+                {{0, 1, 1, 0, 0, 1, 1, 0, 1, 1, 1, 1}},
+            },
+            Cube3State{
+                {{4, 1, 5, 0, 3, 6, 2, 7}},
+                {{1, 2, 2, 1, 1, 2, 2, 1}},
+                {{8, 4, 0, 9, 11, 3, 7, 10, 2, 5, 6, 1}},
+                {{0, 1, 1, 0, 0, 1, 1, 0, 1, 1, 1, 1}},
+            },
+            Cube3State{
+                {{2, 7, 0, 5, 6, 3, 4, 1}},
+                {{1, 2, 2, 1, 1, 2, 2, 1}},
+                {{10, 1, 6, 9, 11, 5, 2, 8, 7, 3, 0, 4}},
+                {{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}},
+            },
+            Cube3State{
+                {{1, 4, 3, 6, 5, 0, 7, 2}},
+                {{1, 2, 2, 1, 1, 2, 2, 1}},
+                {{8, 2, 5, 11, 9, 6, 1, 10, 4, 0, 3, 7}},
+                {{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}},
+            },
+            Cube3State{
+                {{0, 5, 1, 4, 7, 2, 6, 3}},
+                {{1, 2, 2, 1, 1, 2, 2, 1}},
+                {{9, 0, 4, 8, 10, 7, 3, 11, 6, 1, 2, 5}},
+                {{0, 1, 1, 0, 0, 1, 1, 0, 1, 1, 1, 1}},
+            },
+            Cube3State{
+                {{3, 6, 2, 7, 4, 1, 5, 0}},
+                {{1, 2, 2, 1, 1, 2, 2, 1}},
+                {{11, 3, 7, 10, 8, 4, 0, 9, 5, 2, 1, 6}},
+                {{0, 1, 1, 0, 0, 1, 1, 0, 1, 1, 1, 1}},
+            },
+        }};
+        return states;
+    }
 
     static constexpr std::array<std::array<uint8_t, 3>, 8> kCornerFacelets{{
         {{0, 26, 47}}, {{2, 44, 20}}, {{6, 53, 29}}, {{8, 35, 38}},
@@ -417,7 +602,7 @@ private:
                 (state_.edge_ori[source] + kActionEdgeOri[action][i]) % 2
             );
         }
-        return Cube3(next);
+        return Cube3(next, AssumeValid{});
     }
 
     std::array<uint8_t, 54> faceColors() const {

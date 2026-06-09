@@ -53,12 +53,9 @@ TARGET_MAX_EPOCHS = 16
 CLOSE_STATE_BASE_REPETITIONS = 32
 
 CTG_EVAL_DEPTHS = ( 5,  7, 10, 13, 15, 17, 20, 30)
-CTG_EVAL_COUNT  = (20, 20, 20, 20, 20, 20, 20, 20)
+CTG_EVAL_COUNT  = (10, 10, 10, 10, 10, 10, 10, 10)
 
-# CTG_EVAL_DEPTHS = ( 5,  7, 10)
-# CTG_EVAL_COUNT  = (20, 20, 20)
-
-CTG_EVAL_MAX_STATES = 65_000
+CTG_EVAL_MAX_STATES = 6_500_000
 CTG_EVAL_WEIGHT = 0.1
 CTG_EVAL_POP_BATCH_SIZE = 64
 
@@ -441,6 +438,7 @@ def create_ctg_eval_config(seed: int, puzzle: Puzzle) -> dict[str, Any]:
     }
 
     return {
+        "max_states": CTG_EVAL_MAX_STATES,
         "bunches": bunches,
         "metrics": [],
     }
@@ -458,7 +456,9 @@ def append_ctg_metric(
         "depths": {},
     }
     model_version = int(metric["iteration"])
-    executor = get_ctg_eval_executor()
+    max_states = int(ctg_eval.get("max_states", CTG_EVAL_MAX_STATES))
+    ctg_eval["max_states"] = max_states
+    executor = get_ctg_eval_executor(max_states)
     values_by_depth, solved_by_depth = executor.evaluate(
         config["puzzle"],
         model_stem,
@@ -483,11 +483,11 @@ def append_ctg_metric(
     log_ctg_eval(metric["iteration"], ctg_eval["bunches"])
 
 
-def get_ctg_eval_executor() -> CtgZmqClient:
+def get_ctg_eval_executor(max_states: int) -> CtgZmqClient:
     global _CTG_EVAL_EXECUTOR
 
     if _CTG_EVAL_EXECUTOR is None:
-        _CTG_EVAL_EXECUTOR = CtgZmqClient.start()
+        _CTG_EVAL_EXECUTOR = CtgZmqClient.start(max_states)
 
     return _CTG_EVAL_EXECUTOR
 

@@ -29,7 +29,7 @@ from daemon.protocol import (
 
 
 DEFAULT_TIMEOUT_MS = 30 * 60 * 1000
-DEFAULT_WORKERS = 12
+DEFAULT_WORKERS = 15
 NATIVE_WORKER = join(dirname(__file__), "worker")
 
 
@@ -54,7 +54,7 @@ class CtgZmqClient:
         self.workers.bind(worker_endpoint)
 
     @classmethod
-    def start(cls) -> "CtgZmqClient":
+    def start(cls, max_states: int) -> "CtgZmqClient":
         worker_endpoint = _ipc_endpoint(MODEL_DIR, "workers.sock")
         client = cls(
             worker_endpoint,
@@ -65,6 +65,7 @@ class CtgZmqClient:
         client.managed_workers = start_local_workers(
             DEFAULT_WORKERS,
             worker_endpoint,
+            max_states,
         )
         client.wait_for_workers_ready(DEFAULT_WORKERS)
         return client
@@ -218,6 +219,7 @@ class CtgZmqClient:
 def start_local_workers(
     workers: int,
     worker_endpoint: str,
+    max_states: int,
 ) -> list[Popen[str]]:
     assert exists(NATIVE_WORKER), "native worker is missing; run ./build_native.sh"
 
@@ -229,6 +231,8 @@ def start_local_workers(
                     NATIVE_WORKER,
                     "--worker-endpoint",
                     worker_endpoint,
+                    "--max-states",
+                    str(max_states),
                 ],
                 stdin=DEVNULL,
                 stdout=DEVNULL,

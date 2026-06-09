@@ -6,12 +6,30 @@
 #include <utility>
 #include <vector>
 
+#include <ATen/Parallel.h>
 #include <torch/torch.h>
 
 namespace deepcube::costtogo {
+namespace {
+
+void configure_torch_runtime() {
+    static const bool configured = [] {
+        at::set_num_threads(1);
+        at::set_num_interop_threads(1);
+        return true;
+    }();
+    (void)configured;
+}
+
+torch::jit::script::Module load_model(const std::string& model_path) {
+    configure_torch_runtime();
+    return torch::jit::load(model_path, torch::kCPU);
+}
+
+}  // namespace
 
 TorchScriptCostToGo::TorchScriptCostToGo(const std::string& model_path)
-    : model_(torch::jit::load(model_path, torch::kCPU)) {
+    : model_(load_model(model_path)) {
     model_.eval();
 }
 
@@ -39,11 +57,7 @@ std::vector<float> TorchScriptCostToGo::batch(
     ).clone();
 
     torch::NoGradGuard no_grad;
-    torch::Tensor output;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        output = model_.forward({input}).toTensor();
-    }
+    torch::Tensor output = model_.forward({input}).toTensor();
 
     output = output.reshape({static_cast<long>(states.size())})
         .clamp_min(0.0)

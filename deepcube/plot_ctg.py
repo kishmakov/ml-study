@@ -5,6 +5,7 @@ Expected metric shape:
     {
       "config": {
         "ctg_eval": {
+          "max_states": 6500000,
           "metrics": [
             {
               "iteration": 1,
@@ -97,6 +98,7 @@ def load_ctg_series(meta: dict[str, Any]) -> dict[str, Any]:
         "depths": depths,
         "percent_solved": percent,
         "avg_cost_to_go": avg_ctg,
+        "max_states": ctg_eval.get("max_states"),
     }
 
 
@@ -119,11 +121,14 @@ def plot_ctg_matplotlib(series: dict[str, Any], out_path: str) -> None:
 
     axes[0].set_ylabel("Percent solved")
     axes[1].set_ylabel("Average cost-to-go")
+    max_states = series.get("max_states")
+    if max_states is not None:
+        fig.suptitle(f"CTG evaluation max states: {int(max_states):,}")
     for axis in axes:
         axis.set_xlabel("Iteration")
         axis.legend(title="No. of scrambles", ncol=3)
         axis.grid(alpha=0.2)
-    fig.tight_layout()
+    fig.tight_layout(rect=(0, 0, 1, 0.94) if max_states is not None else None)
     fig.savefig(out_path)
     plt.close(fig)
 

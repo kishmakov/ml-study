@@ -22,23 +22,9 @@ public:
     ) const = 0;
 };
 
-class DummyCostToGo : public CostToGo {
-public:
-    std::vector<float> batch(
-        const std::vector<std::vector<float>>& states
-    ) const override;
-};
-
 SearchResult aStarSearch(
     std::unique_ptr<puzzle::Environment> start,
     const CostToGo& cost_to_go,
-    float weight,
-    int max_states,
-    int pop_batch_size
-);
-
-SearchResult aStarSearch(
-    std::unique_ptr<puzzle::Environment> start,
     float weight,
     int max_states,
     int pop_batch_size

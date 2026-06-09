@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <limits>
 #include <memory>
 #include <queue>
@@ -27,18 +26,66 @@ struct StateHash {
     }
 };
 
+constexpr std::uint32_t kInvalidStateId = std::numeric_limits<std::uint32_t>::max();
+
+struct InternResult {
+    std::uint32_t id = kInvalidStateId;
+    bool inserted = false;
+};
+
+struct StateInterner {
+    std::unordered_map<StateKey, std::uint32_t, StateHash> ids;
+    std::vector<StateKey> states;
+
+    void reserve(std::size_t count) {
+        ids.reserve(count * 2U);
+        states.reserve(count);
+    }
+
+    InternResult intern(StateKey key, std::size_t max_states) {
+        const auto existing = ids.find(key);
+        if (existing != ids.end()) {
+            return InternResult{existing->second, false};
+        }
+        if (states.size() >= max_states) {
+            return InternResult{kInvalidStateId, false};
+        }
+
+        const std::uint32_t id = static_cast<std::uint32_t>(states.size());
+        auto [it, inserted] = ids.emplace(std::move(key), id);
+        if (!inserted) {
+            return InternResult{it->second, false};
+        }
+
+        states.push_back(it->first);
+        return InternResult{id, true};
+    }
+
+    std::size_t size() const {
+        return states.size();
+    }
+};
+
+enum class NodeStatus : std::uint8_t {
+    Open,
+    Closed,
+};
+
+struct NodeInfo {
+    float cost = std::numeric_limits<float>::infinity();
+    NodeStatus status = NodeStatus::Open;
+};
+
 struct Parent {
-    StateKey state;
-    int action = -1;
-    float transition_cost = 1.0F;
+    std::uint32_t state_id = kInvalidStateId;
+    std::int8_t action = -1;
 };
 
 struct OpenEntry {
     float priority = 0.0F;
     std::size_t push_count = 0;
     float path_cost = 0.0F;
-    StateKey state;
-    std::shared_ptr<const puzzle::Environment> env;
+    std::uint32_t state_id = kInvalidStateId;
 };
 
 struct OpenEntryCompare {
@@ -52,8 +99,7 @@ struct OpenEntryCompare {
 
 struct Candidate {
     float path_cost = 0.0F;
-    StateKey state;
-    std::shared_ptr<const puzzle::Environment> env;
+    std::uint32_t state_id = kInvalidStateId;
 };
 
 float priority(float path_cost, float heuristic, float weight) {
@@ -61,49 +107,27 @@ float priority(float path_cost, float heuristic, float weight) {
 }
 
 std::vector<int> reconstructActions(
-    const StateKey& goal,
-    const std::unordered_map<StateKey, Parent, StateHash>& parents
+    std::uint32_t goal_id,
+    const std::vector<Parent>& parents
 ) {
     std::vector<int> actions;
-    StateKey current = goal;
+    std::uint32_t current = goal_id;
 
     while (true) {
-        const auto it = parents.find(current);
-        if (it == parents.end()) {
+        const Parent& parent = parents[current];
+        if (parent.state_id == kInvalidStateId) {
             break;
         }
 
-        actions.push_back(it->second.action);
-        current = it->second.state;
+        actions.push_back(static_cast<int>(parent.action));
+        current = parent.state_id;
     }
 
     std::reverse(actions.begin(), actions.end());
     return actions;
 }
 
-std::shared_ptr<const puzzle::Environment> toShared(
-    std::unique_ptr<puzzle::Environment> env
-) {
-    return std::shared_ptr<const puzzle::Environment>(std::move(env));
-}
-
 }  // namespace
-
-std::vector<float> DummyCostToGo::batch(
-    const std::vector<std::vector<float>>& states
-) const {
-    return std::vector<float>(states.size(), 0.0F);
-}
-
-SearchResult aStarSearch(
-    std::unique_ptr<puzzle::Environment> start,
-    float weight,
-    int max_states,
-    int pop_batch_size
-) {
-    const DummyCostToGo dummy_cost_to_go;
-    return aStarSearch(std::move(start), dummy_cost_to_go, weight, max_states, pop_batch_size);
-}
 
 SearchResult aStarSearch(
     std::unique_ptr<puzzle::Environment> start,
@@ -125,17 +149,28 @@ SearchResult aStarSearch(
         throw std::runtime_error("pop batch size must be positive");
     }
 
+    const std::size_t max_state_count = static_cast<std::size_t>(max_states);
     std::priority_queue<OpenEntry, std::vector<OpenEntry>, OpenEntryCompare> open;
-    std::unordered_map<StateKey, float, StateHash> best_cost;
-    std::unordered_map<StateKey, float, StateHash> closed_cost;
-    std::unordered_map<StateKey, Parent, StateHash> parents;
+    StateInterner interner;
+    interner.reserve(max_state_count);
+    std::vector<NodeInfo> node_info;
+    std::vector<Parent> parents;
+    std::vector<std::unique_ptr<puzzle::Environment>> envs;
+    node_info.reserve(max_state_count);
+    parents.reserve(max_state_count);
+    envs.reserve(max_state_count);
 
     std::size_t push_count = 0;
-    std::shared_ptr<const puzzle::Environment> start_env = toShared(std::move(start));
-    StateKey start_state = start_env->getState();
-    best_cost.emplace(start_state, 0.0F);
+    StateKey start_state = start->getState();
+    const InternResult start_intern = interner.intern(std::move(start_state), max_state_count);
+    if (!start_intern.inserted) {
+        throw std::runtime_error("failed to intern A* start state");
+    }
+    node_info.push_back(NodeInfo{0.0F, NodeStatus::Open});
+    parents.push_back(Parent{});
+    envs.push_back(std::move(start));
 
-    const std::vector<float> start_heuristics = cost_to_go.batch({start_env->costToGoInput()});
+    const std::vector<float> start_heuristics = cost_to_go.batch({envs[start_intern.id]->costToGoInput()});
     if (start_heuristics.size() != 1) {
         throw std::runtime_error("batched heuristic returned wrong result count");
     }
@@ -144,31 +179,33 @@ SearchResult aStarSearch(
         priority(0.0F, start_heuristics[0], weight),
         push_count,
         0.0F,
-        start_state,
-        start_env,
+        start_intern.id,
     });
 
+    std::vector<int> actions;
+    std::vector<OpenEntry> popped;
+    std::vector<std::vector<float>> candidate_inputs;
+    std::vector<Candidate> candidates;
+    popped.reserve(static_cast<std::size_t>(pop_batch_size));
+    candidate_inputs.reserve(static_cast<std::size_t>(pop_batch_size) * 12U);
+    candidates.reserve(static_cast<std::size_t>(pop_batch_size) * 12U);
+
     while (!open.empty()) {
-        std::vector<OpenEntry> popped;
+        popped.clear();
         while (!open.empty() && static_cast<int>(popped.size()) < pop_batch_size) {
             OpenEntry entry = open.top();
             open.pop();
 
-            const auto best_it = best_cost.find(entry.state);
-            if (best_it == best_cost.end() || entry.path_cost != best_it->second) {
+            const NodeInfo& info = node_info[entry.state_id];
+            if (info.status == NodeStatus::Closed || entry.path_cost > info.cost) {
                 continue;
             }
 
-            const auto closed_it = closed_cost.find(entry.state);
-            if (closed_it != closed_cost.end() && closed_it->second <= entry.path_cost) {
-                continue;
-            }
-
-            if (entry.env->isSolved()) {
+            if (envs[entry.state_id]->isSolved()) {
                 return SearchResult{
                     true,
-                    reconstructActions(entry.state, parents),
-                    static_cast<int>(best_cost.size()),
+                    reconstructActions(entry.state_id, parents),
+                    static_cast<int>(interner.size()),
                 };
             }
 
@@ -179,33 +216,45 @@ SearchResult aStarSearch(
             continue;
         }
 
-        std::vector<std::vector<float>> candidate_inputs;
-        std::vector<Candidate> candidates;
+        candidate_inputs.clear();
+        candidates.clear();
 
         for (const OpenEntry& entry : popped) {
-            closed_cost[entry.state] = entry.path_cost;
+            node_info[entry.state_id].status = NodeStatus::Closed;
+            const std::unique_ptr<puzzle::Environment>& env = envs[entry.state_id];
 
-            for (int action : entry.env->getActions()) {
-                std::unique_ptr<puzzle::Environment> child_unique = entry.env->getNextState(action);
+            env->getActions(actions);
+            for (int action : actions) {
+                std::unique_ptr<puzzle::Environment> child_unique = env->getNextState(action);
                 const float child_path_cost = entry.path_cost + 1.0F;
                 StateKey child_state = child_unique->getState();
 
-                const auto best_it = best_cost.find(child_state);
-                const float previous_best = best_it == best_cost.end()
-                    ? std::numeric_limits<float>::infinity()
-                    : best_it->second;
-                if (child_path_cost >= previous_best) {
-                    continue;
-                }
-                if (best_it == best_cost.end() && static_cast<int>(best_cost.size()) >= max_states) {
+                const InternResult child_intern = interner.intern(std::move(child_state), max_state_count);
+                if (child_intern.id == kInvalidStateId) {
                     continue;
                 }
 
-                std::shared_ptr<const puzzle::Environment> child_env = toShared(std::move(child_unique));
-                best_cost[child_state] = child_path_cost;
-                parents[child_state] = Parent{entry.state, action, 1.0F};
-                candidate_inputs.push_back(child_env->costToGoInput());
-                candidates.push_back(Candidate{child_path_cost, std::move(child_state), std::move(child_env)});
+                if (child_intern.inserted) {
+                    node_info.push_back(NodeInfo{child_path_cost, NodeStatus::Open});
+                    parents.push_back(Parent{
+                        entry.state_id,
+                        static_cast<std::int8_t>(action),
+                    });
+                    envs.push_back(std::move(child_unique));
+                } else {
+                    NodeInfo& child_info = node_info[child_intern.id];
+                    if (child_info.status == NodeStatus::Closed || child_path_cost >= child_info.cost) {
+                        continue;
+                    }
+                    child_info.cost = child_path_cost;
+                    parents[child_intern.id] = Parent{
+                        entry.state_id,
+                        static_cast<std::int8_t>(action),
+                    };
+                }
+
+                candidate_inputs.push_back(envs[child_intern.id]->costToGoInput());
+                candidates.push_back(Candidate{child_path_cost, child_intern.id});
             }
         }
 
@@ -224,8 +273,7 @@ SearchResult aStarSearch(
                 priority(candidates[i].path_cost, child_heuristics[i], weight),
                 push_count,
                 candidates[i].path_cost,
-                candidates[i].state,
-                candidates[i].env,
+                candidates[i].state_id,
             });
         }
     }
@@ -233,7 +281,7 @@ SearchResult aStarSearch(
     return SearchResult{
         false,
         {},
-        static_cast<int>(best_cost.size()),
+        static_cast<int>(interner.size()),
     };
 }
 

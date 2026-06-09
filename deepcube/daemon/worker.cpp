@@ -4,19 +4,16 @@
 #include "puzzle/environment.hpp"
 #include "search/a_star.hpp"
 
-#include <atomic>
-#include <condition_variable>
+#include <algorithm>
+#include <cctype>
 #include <cstddef>
 #include <cstdlib>
 #include <exception>
 #include <memory>
-#include <mutex>
 #include <optional>
-#include <queue>
 #include <sstream>
 #include <stdexcept>
 #include <string>
-#include <thread>
 #include <utility>
 #include <vector>
 
@@ -31,9 +28,9 @@ constexpr const char* kResult = "RESULT";
 constexpr const char* kError = "ERROR";
 constexpr const char* kReady = "READY";
 constexpr const char* kStop = "STOP";
+
 constexpr float kCtgEvalWeight = 0.1F;
-constexpr int kCtgEvalMaxStates = 65000;
-constexpr int kCtgEvalPopBatchSize = 4;
+constexpr int kCtgEvalPopBatchSize = 64;
 
 struct Task {
     std::string client_id;
@@ -61,10 +58,44 @@ struct Result {
     std::string error_message;
 };
 
+std::string normalize_puzzle_name(const std::string& puzzle_name) {
+    std::string normalized;
+    normalized.reserve(puzzle_name.size());
+    for (unsigned char ch : puzzle_name) {
+        if (ch == '_' || ch == '-' || std::isspace(ch)) {
+            continue;
+        }
+        normalized.push_back(static_cast<char>(std::tolower(ch)));
+    }
+    return normalized;
+}
+
+std::optional<std::size_t> model_input_size_for_puzzle(const std::string& puzzle_name) {
+    const std::string key = normalize_puzzle_name(puzzle_name);
+    if (key == "cube3") {
+        return 54 * 6;
+    }
+
+    constexpr const char* prefix = "npuzzle";
+    if (key.rfind(prefix, 0) == 0) {
+        const std::string dim_text = key.substr(std::string(prefix).size());
+        if (
+            !dim_text.empty()
+            && std::all_of(dim_text.begin(), dim_text.end(), [](unsigned char ch) {
+                return std::isdigit(ch);
+            })
+        ) {
+            const int dim = std::stoi(dim_text);
+            return static_cast<std::size_t>(dim * dim);
+        }
+    }
+
+    return std::nullopt;
+}
+
 class WorkerState {
 public:
     void load(const Update& update) {
-        std::lock_guard<std::mutex> lock(mutex_);
         if (
             heuristic_ != nullptr
             && puzzle_name_ == update.puzzle_name
@@ -74,16 +105,25 @@ public:
             return;
         }
 
-        heuristic_ = std::make_shared<deepcube::costtogo::TorchScriptCostToGo>(
+        auto heuristic = std::make_shared<deepcube::costtogo::TorchScriptCostToGo>(
             update.model_stem + ".torchscript"
         );
+        const std::optional<std::size_t> input_size = model_input_size_for_puzzle(update.puzzle_name);
+        if (input_size) {
+            const std::vector<float> warmup_input(*input_size, 0.0F);
+            const std::vector<float> warmup_output = heuristic->batch({warmup_input});
+            if (warmup_output.size() != 1) {
+                throw std::runtime_error("cost-to-go warmup returned wrong result count");
+            }
+        }
+
+        heuristic_ = std::move(heuristic);
         puzzle_name_ = update.puzzle_name;
         model_stem_ = update.model_stem;
         model_version_ = update.model_version;
     }
 
-    std::shared_ptr<const deepcube::search::CostToGo> heuristicFor(const Task& task) const {
-        std::lock_guard<std::mutex> lock(mutex_);
+    const deepcube::search::CostToGo& heuristicFor(const Task& task) const {
         if (heuristic_ == nullptr) {
             throw std::runtime_error("worker model was not loaded");
         }
@@ -94,70 +134,14 @@ public:
         ) {
             throw std::runtime_error("worker model does not match task model");
         }
-        return heuristic_;
+        return *heuristic_;
     }
 
 private:
-    mutable std::mutex mutex_;
     std::string puzzle_name_;
     std::string model_stem_;
     int model_version_ = 0;
     std::shared_ptr<const deepcube::search::CostToGo> heuristic_;
-};
-
-template <typename T>
-class BlockingQueue {
-public:
-    void push(T value) {
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            if (closed_) {
-                return;
-            }
-            queue_.push(std::move(value));
-        }
-        cv_.notify_one();
-    }
-
-    std::optional<T> pop() {
-        std::unique_lock<std::mutex> lock(mutex_);
-        cv_.wait(lock, [this] {
-            return closed_ || !queue_.empty();
-        });
-
-        if (queue_.empty()) {
-            return std::nullopt;
-        }
-
-        T value = std::move(queue_.front());
-        queue_.pop();
-        return value;
-    }
-
-    bool try_pop(T& value) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (queue_.empty()) {
-            return false;
-        }
-
-        value = std::move(queue_.front());
-        queue_.pop();
-        return true;
-    }
-
-    void close() {
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            closed_ = true;
-        }
-        cv_.notify_all();
-    }
-
-private:
-    std::mutex mutex_;
-    std::condition_variable cv_;
-    std::queue<T> queue_;
-    bool closed_ = false;
 };
 
 std::vector<std::string> split(const std::string& raw, char delimiter, std::size_t max_splits) {
@@ -234,18 +218,6 @@ std::string encode_error(const std::string& client_id, const std::string& task_i
     return std::string(kError) + "\t" + client_id + "\t" + task_id + "\t" + message;
 }
 
-std::string encode_model_input(const std::vector<float>& input) {
-    std::ostringstream encoded;
-    encoded << std::setprecision(9);
-    for (std::size_t i = 0; i < input.size(); ++i) {
-        if (i != 0) {
-            encoded << ',';
-        }
-        encoded << input[i];
-    }
-    return encoded.str();
-}
-
 std::string zmq_error(const std::string& action) {
     return action + ": " + zmq_strerror(zmq_errno());
 }
@@ -276,104 +248,51 @@ void send_string(void* socket, const std::string& value) {
     }
 }
 
-class WorkerPool {
-public:
-    WorkerPool(
-        std::size_t thread_count,
-        BlockingQueue<Task>& tasks,
-        BlockingQueue<Result>& results,
-        const WorkerState& worker_state
-    )
-        : tasks_(tasks),
-          results_(results),
-          worker_state_(worker_state) {
-        workers_.reserve(thread_count);
-        for (std::size_t i = 0; i < thread_count; ++i) {
-            workers_.emplace_back([this] {
-                worker_loop();
-            });
-        }
-    }
-
-    ~WorkerPool() {
-        stop();
-    }
-
-    void stop() {
-        if (stopped_.exchange(true)) {
-            return;
+Result process_task(const Task& task, const WorkerState& worker_state, int max_states) {
+    try {
+        const deepcube::search::CostToGo& heuristic = worker_state.heuristicFor(task);
+        const std::unique_ptr<deepcube::puzzle::Environment> puzzle =
+            deepcube::puzzle::createEnvironment(task.puzzle_name, task.state);
+        const std::vector<float> input = puzzle->costToGoInput();
+        const std::vector<float> values = heuristic.batch({input});
+        if (values.size() != 1) {
+            throw std::runtime_error("cost-to-go returned wrong result count");
         }
 
-        tasks_.close();
-        for (std::thread& worker : workers_) {
-            if (worker.joinable()) {
-                worker.join();
-            }
-        }
+        deepcube::search::SearchResult search_result = deepcube::search::aStarSearch(
+            deepcube::puzzle::createEnvironment(task.puzzle_name, task.state),
+            heuristic,
+            kCtgEvalWeight,
+            max_states,
+            kCtgEvalPopBatchSize
+        );
+
+        return Result{
+            task.client_id,
+            task.task_id,
+            task.depth,
+            values[0],
+            search_result.solved ? 1 : 0,
+            false,
+            "",
+        };
+    } catch (const std::exception& error) {
+        Result failed;
+        failed.client_id = task.client_id;
+        failed.task_id = task.task_id;
+        failed.depth = task.depth;
+        failed.failed = true;
+        failed.error_message = error.what();
+        return failed;
     }
-
-private:
-    void worker_loop() {
-        while (!stopped_) {
-            std::optional<Task> task = tasks_.pop();
-            if (!task) {
-                break;
-            }
-
-            try {
-                const std::shared_ptr<const deepcube::search::CostToGo> heuristic =
-                    worker_state_.heuristicFor(*task);
-                const std::unique_ptr<deepcube::puzzle::Environment> puzzle =
-                    deepcube::puzzle::createEnvironment(task->puzzle_name, task->state);
-                const std::vector<float> input = puzzle->costToGoInput();
-                const std::vector<float> values = heuristic->batch({input});
-                if (values.size() != 1) {
-                    throw std::runtime_error("cost-to-go returned wrong result count");
-                }
-
-                deepcube::search::SearchResult search_result = deepcube::search::aStarSearch(
-                    deepcube::puzzle::createEnvironment(task->puzzle_name, task->state),
-                    *heuristic,
-                    kCtgEvalWeight,
-                    kCtgEvalMaxStates,
-                    kCtgEvalPopBatchSize
-                );
-
-                results_.push(Result{
-                    task->client_id,
-                    task->task_id,
-                    task->depth,
-                    values[0],
-                    search_result.solved ? 1 : 0,
-                    false,
-                    "",
-                });
-            } catch (const std::exception& error) {
-                Result failed;
-                failed.client_id = task->client_id;
-                failed.task_id = task->task_id;
-                failed.depth = task->depth;
-                failed.failed = true;
-                failed.error_message = error.what();
-                results_.push(std::move(failed));
-            }
-        }
-    }
-
-    BlockingQueue<Task>& tasks_;
-    BlockingQueue<Result>& results_;
-    const WorkerState& worker_state_;
-    std::vector<std::thread> workers_;
-    std::mutex output_mutex_;
-    std::atomic<bool> stopped_{false};
-};
+}
 
 class ZmqWorker {
 public:
-    ZmqWorker(std::string worker_endpoint, std::size_t worker_count)
+    ZmqWorker(std::string worker_endpoint, int max_states)
         : worker_endpoint_(std::move(worker_endpoint)),
           worker_id_(std::to_string(getpid())),
-          workers_(worker_count, tasks_, results_, worker_state_) {}
+          max_states_(max_states) {}
 
     ~ZmqWorker() {
         stop();
@@ -405,16 +324,7 @@ public:
             {socket_, 0, ZMQ_POLLIN, 0},
         };
 
-        while (running_) {
-            Result result;
-            while (results_.try_pop(result)) {
-                if (result.failed) {
-                    send_string(socket_, encode_error(result.client_id, result.task_id, result.error_message));
-                } else {
-                    send_string(socket_, encode_result(result));
-                }
-            }
-
+        while (true) {
             const int event_count = zmq_poll(poll_items, 1, 100);
             if (event_count < 0) {
                 throw std::runtime_error(zmq_error("zmq_poll failed"));
@@ -434,10 +344,12 @@ public:
                 worker_state_.load(update);
                 send_string(socket_, encode_updated(worker_id_, update.model_version));
             } else if (command == kTask) {
-                try {
-                    tasks_.push(decode_task(raw));
-                } catch (const std::exception& error) {
-                    send_string(socket_, encode_error("", "", error.what()));
+                const Task task = decode_task(raw);
+                const Result result = process_task(task, worker_state_, max_states_);
+                if (result.failed) {
+                    send_string(socket_, encode_error(result.client_id, result.task_id, result.error_message));
+                } else {
+                    send_string(socket_, encode_result(result));
                 }
             } else {
                 throw std::runtime_error("invalid worker command: " + raw);
@@ -446,11 +358,6 @@ public:
     }
 
     void stop() {
-        running_ = false;
-        workers_.stop();
-        tasks_.close();
-        results_.close();
-
         if (socket_ != nullptr) {
             zmq_close(socket_);
             socket_ = nullptr;
@@ -464,15 +371,12 @@ public:
 private:
     std::string worker_endpoint_;
     std::string worker_id_;
+    int max_states_ = 0;
 
-    BlockingQueue<Task> tasks_;
-    BlockingQueue<Result> results_;
     WorkerState worker_state_;
-    WorkerPool workers_;
 
     void* context_ = nullptr;
     void* socket_ = nullptr;
-    std::atomic<bool> running_{true};
 };
 
 std::string require_arg(int argc, char** argv, const std::string& name) {
@@ -484,22 +388,17 @@ std::string require_arg(int argc, char** argv, const std::string& name) {
     throw std::runtime_error("missing required argument: " + name);
 }
 
-std::size_t optional_size_arg(int argc, char** argv, const std::string& name, std::size_t default_value) {
-    for (int i = 1; i + 1 < argc; ++i) {
-        if (argv[i] == name) {
-            const int parsed = std::stoi(argv[i + 1]);
-            if (parsed <= 0) {
-                throw std::runtime_error("argument must be positive: " + name);
-            }
-            return static_cast<std::size_t>(parsed);
-        }
+int require_positive_int_arg(int argc, char** argv, const std::string& name) {
+    const int value = std::stoi(require_arg(argc, argv, name));
+    if (value <= 0) {
+        throw std::runtime_error("argument must be positive: " + name);
     }
-    return default_value;
+    return value;
 }
 
 void usage(const char* program) {
     std::cerr << "usage: " << program
-              << " --worker-endpoint ENDPOINT [--threads N]\n";
+              << " --worker-endpoint ENDPOINT --max-states N\n";
 }
 
 }  // namespace
@@ -507,9 +406,9 @@ void usage(const char* program) {
 int main(int argc, char** argv) {
     try {
         const std::string worker_endpoint = require_arg(argc, argv, "--worker-endpoint");
-        const std::size_t thread_count = optional_size_arg(argc, argv, "--threads", 12);
+        const int max_states = require_positive_int_arg(argc, argv, "--max-states");
 
-        ZmqWorker worker(worker_endpoint, thread_count);
+        ZmqWorker worker(worker_endpoint, max_states);
         worker.run();
     } catch (const std::exception& error) {
         usage(argv[0]);

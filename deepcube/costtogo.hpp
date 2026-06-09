@@ -2,7 +2,6 @@
 
 #include "search/a_star.hpp"
 
-#include <mutex>
 #include <string>
 #include <vector>
 
@@ -19,7 +18,6 @@ public:
     ) const override;
 
 private:
-    mutable std::mutex mutex_;
     mutable torch::jit::script::Module model_;
 };
 
