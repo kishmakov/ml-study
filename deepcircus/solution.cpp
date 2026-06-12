@@ -3,11 +3,12 @@
 #include <utility>
 
 BooleanFunction solve(int N, std::string values) {
-    (void)N;
-    (void)values;
+    return [=](const std::string& input) {
+        int id = 0;
+        for (int i = 0; i < N; i++) {
+            id += (input[i] - '0') << (N - 1 - i);
+        }
 
-    return [](const std::string& input) {
-        (void)input;
-        return true;
+        return values[id] == '1';
     };
 }
