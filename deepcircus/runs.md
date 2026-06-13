@@ -5,3 +5,7 @@
 ## 1: Branching on lowest bit
 
 489'231
+
+## 2: Looking for best bit recursively
+
+133'378

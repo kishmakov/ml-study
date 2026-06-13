@@ -4,6 +4,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <vector>
 
 inline uint64_t operator>>(const std::string& input, size_t bit) {
     return static_cast<uint64_t>(input.at(bit) - '0');

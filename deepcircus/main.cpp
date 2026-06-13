@@ -105,6 +105,8 @@ static size_t run_test(size_t test_id, const TestCase& test) {
              << ", got " << (first_actual ? '1' : '0') << "\n";
     }
 
+    std::cout << std::flush;
+
     return local_failures;
 }
 
