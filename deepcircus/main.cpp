@@ -5,6 +5,9 @@
 
 using namespace std;
 
+int no_optimisation_nodes = 0;
+int total_nodes = 0;
+
 static optional<int> bit_count_from_table_size(size_t size) {
     if (size == 0) return nullopt;
 
@@ -55,7 +58,18 @@ static size_t run_test(size_t test_id, const TestCase& test) {
     }
 
     const int N = *maybe_N;
-    const BooleanFunction candidate = Solve(N, test.values);
+    const auto nodes = Solve(N, test.values);
+
+    auto candidate = [&](const std::string& input) {
+        auto node = nodes[0];
+
+        while (node.division) {
+            bool bit = input >> node.division->bitId;
+            node = nodes[bit ? node.division->node1Id : node.division->node0Id];
+        }
+
+        return node.value;
+    };
     size_t local_failures = 0;
     string first_bad_input;
     char first_expected = '?';
@@ -76,7 +90,13 @@ static size_t run_test(size_t test_id, const TestCase& test) {
     }
 
     if (local_failures == 0) {
-        cout << "PASS #" << test_id << " " << test.title << "\n";
+        int decision_nodes = 0;
+        for (auto& node: nodes) {
+            decision_nodes += node.division ? 1 : 0;
+        }
+        no_optimisation_nodes += (1 << N) - 1;
+        total_nodes += decision_nodes;
+        cout << "PASS #" << test_id << " " << test.title << " @ " << decision_nodes << " nodes \n";
     } else {
         cout << "FAIL #" << test_id << " " << test.title
              << ": " << local_failures << " mismatches"
@@ -104,6 +124,9 @@ static int run_tests(const vector<TestCase>& tests) {
         cout << ", " << failed_points << " point mismatches";
     }
     cout << "\n";
+
+    std::cout << "no_opt=" << no_optimisation_nodes
+        << " cur=" << total_nodes << "\n";
 
     return failed_tests == 0 ? 0 : 1;
 }

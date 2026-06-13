@@ -2,8 +2,23 @@
 
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 
-using BooleanFunction = std::function<bool(const std::string&)>;
+inline uint64_t operator>>(const std::string& input, size_t bit) {
+    return static_cast<uint64_t>(input.at(bit) - '0');
+}
 
-BooleanFunction Solve(uint64_t N, const std::string& values);
+struct Div {
+    size_t bitId;
+
+    size_t node0Id;
+    size_t node1Id;
+};
+
+struct Node {
+    std::optional<Div> division;
+    bool value;
+};
+
+std::vector<Node>  Solve(uint64_t N, const std::string& values);

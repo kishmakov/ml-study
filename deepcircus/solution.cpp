@@ -1,24 +1,8 @@
 #include "solution.h"
 
 #include <cassert>
-#include <optional>
 #include <vector>
 
-static uint64_t operator>>(const std::string& input, size_t bitId) {
-    return static_cast<uint64_t>(input.at(bitId) - '0');
-}
-
-struct Div {
-    size_t bitId;
-
-    size_t node0Id;
-    size_t node1Id;
-};
-
-struct Node {
-    std::optional<Div> division;
-    bool value;
-};
 
 struct SelectedBits
 {
@@ -76,24 +60,9 @@ void BuildNodes(
     }
 }
 
-std::vector<Node> BuildNodesInitial(uint64_t N, const std::string& values) {
+std::vector<Node> Solve(uint64_t N, const std::string& values) {
     std::vector<Node> nodes(0);
     nodes.emplace_back(std::nullopt, false);
     BuildNodes(N, values, 0, {0, 0}, nodes);
     return nodes;
-}
-
-BooleanFunction Solve(uint64_t N, const std::string& values) {
-    auto nodes = BuildNodesInitial(N, values);
-
-    return [=](const std::string& input) {
-        auto node = nodes[0];
-
-        while (node.division) {
-            bool bit = input >> node.division->bitId;
-            node = nodes[bit ? node.division->node1Id : node.division->node0Id];
-        }
-
-        return node.value;
-    };
 }
