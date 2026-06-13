@@ -12,7 +12,7 @@ static string truth_from_id(int N, uint64_t fid) {
     string s;
     s.reserve(m);
     for (size_t i = 0; i < m; ++i) {
-        char bit = ((fid >> i) & 1ull) ? '1' : '0';
+        char bit = ((fid >> (m - 1 - i)) & 1ull) ? '1' : '0';
         s.push_back(bit);
     }
     return s;

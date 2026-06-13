@@ -18,11 +18,10 @@ static optional<int> bit_count_from_table_size(size_t size) {
     return N;
 }
 
-static string input_for_index(int N, size_t index) {
+static string input_for_index(uint64_t N, size_t index) {
     string input(N, '0');
     for (int bit = 0; bit < N; ++bit) {
-        const int shift = N - 1 - bit;
-        input[bit] = ((index >> shift) & 1ull) ? '1' : '0';
+        input[bit] = ((index >> bit) & 1) ? '1' : '0';
     }
     return input;
 }
@@ -56,7 +55,7 @@ static size_t run_test(size_t test_id, const TestCase& test) {
     }
 
     const int N = *maybe_N;
-    const BooleanFunction candidate = solve(N, test.values);
+    const BooleanFunction candidate = Solve(N, test.values);
     size_t local_failures = 0;
     string first_bad_input;
     char first_expected = '?';
@@ -121,6 +120,7 @@ static void print_usage(const char* argv0) {
 int main(int argc, char** argv) {
     ios::sync_with_stdio(false);
     cin.tie(nullptr);
+    const vector<TestCase> tests = make_tests();
 
     try {
         if (argc == 2 && string(argv[1]) == "--help") {
@@ -129,14 +129,13 @@ int main(int argc, char** argv) {
         }
 
         if (argc == 2 && string(argv[1]) == "--count") {
-            cout << make_tests().size() << '\n';
+            cout << tests.size() << '\n';
             return 0;
         }
 
         if ((argc == 2 && is_unsigned_integer(argv[1])) ||
             (argc == 3 && string(argv[1]) == "--id" && is_unsigned_integer(argv[2]))) {
             const string id_arg = argc == 2 ? argv[1] : argv[2];
-            const vector<TestCase> tests = make_tests();
             const size_t id = stoull(id_arg);
             if (id >= tests.size()) {
                 cerr << "Test id " << id << " is out of range [0, " << tests.size() << ")\n";
@@ -147,14 +146,12 @@ int main(int argc, char** argv) {
         }
 
         if (argc == 2 && string(argv[1]) == "--write-input") {
-            const vector<TestCase> tests = make_tests();
             write_tests_file("input.txt", tests);
             cerr << "Wrote " << tests.size() << " cases to input.txt\n";
             return 0;
         }
 
         if (argc == 3 && string(argv[1]) == "--write-input") {
-            const vector<TestCase> tests = make_tests();
             write_tests_file(argv[2], tests);
             cerr << "Wrote " << tests.size() << " cases to " << argv[2] << "\n";
             return 0;
