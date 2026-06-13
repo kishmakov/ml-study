@@ -5,21 +5,8 @@
 
 using namespace std;
 
-int no_optimisation_nodes = 0;
-int total_nodes = 0;
-
-static optional<int> bit_count_from_table_size(size_t size) {
-    if (size == 0) return nullopt;
-
-    int N = 0;
-    size_t expected = 1;
-    while (expected < size) {
-        expected <<= 1;
-        ++N;
-    }
-    if (expected != size) return nullopt;
-    return N;
-}
+uint64_t no_optimisation_nodes = 0;
+uint64_t total_nodes = 0;
 
 static string input_for_index(uint64_t N, size_t index) {
     string input(N, '0');
@@ -37,16 +24,22 @@ static bool is_unsigned_integer(const string& s) {
     return true;
 }
 
+static optional<uint64_t> input_count(uint64_t N) {
+    if (N >= 63) return nullopt;
+    return 1ull << N;
+}
+
 static size_t run_test(size_t test_id, const TestCase& test) {
-    const optional<int> maybe_N = bit_count_from_table_size(test.values.size());
-    if (!maybe_N) {
+    const uint64_t N = test.inputBits;
+    const optional<uint64_t> maybe_input_count = input_count(N);
+    if (!maybe_input_count) {
         cout << "FAIL #" << test_id << " " << test.title
-             << ": truth table length is not a power of two\n";
+             << ": input bit count is too large for the current bitmask representation\n";
         return 1;
     }
 
-    const int N = *maybe_N;
-    const auto nodes = Solve(N, test.values);
+    const uint64_t total_inputs = *maybe_input_count;
+    const auto nodes = Solve(N, test.func);
 
     auto candidate = [&](const std::string& input) {
         auto node = nodes[0];
@@ -60,17 +53,17 @@ static size_t run_test(size_t test_id, const TestCase& test) {
     };
     size_t local_failures = 0;
     string first_bad_input;
-    char first_expected = '?';
+    bool first_expected = false;
     bool first_actual = false;
 
-    for (size_t i = 0; i < test.values.size(); ++i) {
+    for (size_t i = 0; i < total_inputs; ++i) {
         const string input = input_for_index(N, i);
         const bool actual = candidate(input);
-        const bool expected = test.values[i] == '1';
+        const bool expected = test.func(input);
         if (actual != expected) {
             if (local_failures == 0) {
                 first_bad_input = input;
-                first_expected = test.values[i];
+                first_expected = expected;
                 first_actual = actual;
             }
             ++local_failures;
@@ -82,14 +75,14 @@ static size_t run_test(size_t test_id, const TestCase& test) {
         for (auto& node: nodes) {
             decision_nodes += node.division ? 1 : 0;
         }
-        no_optimisation_nodes += (1 << N) - 1;
+        no_optimisation_nodes += total_inputs - 1;
         total_nodes += decision_nodes;
         cout << "PASS #" << test_id << " " << test.title << " @ " << decision_nodes << " nodes \n";
     } else {
         cout << "FAIL #" << test_id << " " << test.title
              << ": " << local_failures << " mismatches"
              << ", first at input " << first_bad_input
-             << ", expected " << first_expected
+             << ", expected " << (first_expected ? '1' : '0')
              << ", got " << (first_actual ? '1' : '0') << "\n";
     }
 
@@ -98,17 +91,18 @@ static size_t run_test(size_t test_id, const TestCase& test) {
     return local_failures;
 }
 
-static int run_tests(const vector<TestCase>& tests) {
+static int run_tests() {
     size_t failed_tests = 0;
     size_t failed_points = 0;
+    const size_t tests_count = GetTestsNumber();
 
-    for (size_t test_id = 0; test_id < tests.size(); ++test_id) {
-        const size_t local_failures = run_test(test_id, tests[test_id]);
+    for (size_t test_id = 0; test_id < tests_count; ++test_id) {
+        const size_t local_failures = run_test(test_id, GetTestById(test_id));
         if (local_failures != 0) ++failed_tests;
         failed_points += local_failures;
     }
 
-    cout << "Summary: " << (tests.size() - failed_tests) << "/" << tests.size()
+    cout << "Summary: " << (tests_count - failed_tests) << "/" << tests_count
          << " tests passed";
     if (failed_tests != 0) {
         cout << ", " << failed_points << " point mismatches";
@@ -132,7 +126,6 @@ static void print_usage(const char* argv0) {
 int main(int argc, char** argv) {
     ios::sync_with_stdio(false);
     cin.tie(nullptr);
-    const vector<TestCase> tests = make_tests();
 
     try {
         if (argc == 2 && string(argv[1]) == "--help") {
@@ -141,7 +134,7 @@ int main(int argc, char** argv) {
         }
 
         if (argc == 2 && string(argv[1]) == "--count") {
-            cout << tests.size() << '\n';
+            cout << GetTestsNumber() << '\n';
             return 0;
         }
 
@@ -149,11 +142,11 @@ int main(int argc, char** argv) {
             (argc == 3 && string(argv[1]) == "--id" && is_unsigned_integer(argv[2]))) {
             const string id_arg = argc == 2 ? argv[1] : argv[2];
             const size_t id = stoull(id_arg);
-            if (id >= tests.size()) {
-                cerr << "Test id " << id << " is out of range [0, " << tests.size() << ")\n";
+            if (id >= GetTestsNumber()) {
+                cerr << "Test id " << id << " is out of range [0, " << GetTestsNumber() << ")\n";
                 return 1;
             }
-            const size_t failures = run_test(id, tests[id]);
+            const size_t failures = run_test(id, GetTestById(id));
             return failures == 0 ? 0 : 1;
         }
 
@@ -162,7 +155,7 @@ int main(int argc, char** argv) {
             return 1;
         }
 
-        return run_tests(make_tests());
+        return run_tests();
     } catch (const exception& e) {
         cerr << "Error: " << e.what() << "\n";
         return 2;

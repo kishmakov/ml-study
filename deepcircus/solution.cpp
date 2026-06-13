@@ -66,9 +66,9 @@ SelectedBits WithBit(SelectedBits bits, uint64_t bitId, bool value) {
 class TreeBuilder
 {
 public:
-    TreeBuilder(uint64_t N, const std::string& values)
+    TreeBuilder(uint64_t N, const std::function<bool(const std::string&)>& func)
         : N_(N)
-        , values_(values)
+        , func_(func)
     {
         assert(N_ < 63);
     }
@@ -104,7 +104,7 @@ private:
         uint64_t sub = maskComplement;
         do {
             const uint64_t id = sub | bits.values;
-            const uint64_t value = values_ >> id;
+            const uint64_t value = Value(id);
             stats.seen |= 1 << value;
             stats.ones += value;
             ++stats.total;
@@ -222,17 +222,34 @@ private:
     }
 
     uint64_t N_;
-    const std::string& values_;
+    const std::function<bool(const std::string&)>& func_;
+    std::unordered_map<uint64_t, uint64_t> valueMemo_;
     std::unordered_map<SelectedBits, StateStats, SelectedBitsHash> statsMemo_;
     std::unordered_map<SelectedBits, StatePlan, SelectedBitsHash> exactMemo_;
+
+    uint64_t Value(uint64_t id) {
+        auto cached = valueMemo_.find(id);
+        if (cached != valueMemo_.end()) {
+            return cached->second;
+        }
+
+        std::string input(N_, '0');
+        for (uint64_t bit = 0; bit < N_; ++bit) {
+            input[bit] = ((id >> bit) & 1ull) != 0 ? '1' : '0';
+        }
+
+        const uint64_t value = func_(input) ? 1 : 0;
+        valueMemo_[id] = value;
+        return value;
+    }
 };
 
 }  // namespace
 
-std::vector<Node> Solve(uint64_t N, const std::string& values) {
+std::vector<Node> Solve(uint64_t N, const std::function<bool(const std::string&)>& func) {
     std::vector<Node> nodes(0);
     nodes.emplace_back(std::nullopt, false);
-    TreeBuilder builder(N, values);
+    TreeBuilder builder(N, func);
     builder.BuildNodes(0, {0, 0}, nodes);
     return nodes;
 }

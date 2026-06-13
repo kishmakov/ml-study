@@ -22,4 +22,4 @@ struct Node {
     bool value;
 };
 
-std::vector<Node>  Solve(uint64_t N, const std::string& values);
+std::vector<Node> Solve(uint64_t N, const std::function<bool(const std::string&)>& func);
