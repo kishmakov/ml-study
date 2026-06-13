@@ -39,11 +39,6 @@ static void add_case(vector<TestCase>& tests, string title, string bits) {
     tests.push_back(TestCase{std::move(title), std::move(bits)});
 }
 
-void write_case(ostream& out, const TestCase& test) {
-    out << test.title << '\n';
-    out << test.values << '\n';
-}
-
 vector<TestCase> make_tests() {
     vector<TestCase> tests;
 

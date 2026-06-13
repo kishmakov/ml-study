@@ -9,5 +9,4 @@ struct TestCase {
     std::string values;
 };
 
-void write_case(std::ostream& out, const TestCase& test);
 std::vector<TestCase> make_tests();

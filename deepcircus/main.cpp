@@ -37,18 +37,6 @@ static bool is_unsigned_integer(const string& s) {
     return true;
 }
 
-static void write_tests_file(const string& path, const vector<TestCase>& tests) {
-    ofstream out(path, ios::binary);
-    if (!out) {
-        throw runtime_error("failed to open output file: " + path);
-    }
-
-    out << tests.size() << '\n';
-    for (const TestCase& test : tests) {
-        write_case(out, test);
-    }
-}
-
 static size_t run_test(size_t test_id, const TestCase& test) {
     const optional<int> maybe_N = bit_count_from_table_size(test.values.size());
     if (!maybe_N) {
@@ -138,8 +126,7 @@ static void print_usage(const char* argv0) {
          << "  " << argv0 << "                         runs all generated tests\n"
          << "  " << argv0 << " ID                      runs one generated test by zero-based id\n"
          << "  " << argv0 << " --id ID                 same as ID\n"
-         << "  " << argv0 << " --count                  prints number of generated tests\n"
-         << "  " << argv0 << " --write-input [PATH]     writes all generated tests, default input.txt\n";
+         << "  " << argv0 << " --count                 prints number of generated tests\n";
 }
 
 int main(int argc, char** argv) {
@@ -168,18 +155,6 @@ int main(int argc, char** argv) {
             }
             const size_t failures = run_test(id, tests[id]);
             return failures == 0 ? 0 : 1;
-        }
-
-        if (argc == 2 && string(argv[1]) == "--write-input") {
-            write_tests_file("input.txt", tests);
-            cerr << "Wrote " << tests.size() << " cases to input.txt\n";
-            return 0;
-        }
-
-        if (argc == 3 && string(argv[1]) == "--write-input") {
-            write_tests_file(argv[2], tests);
-            cerr << "Wrote " << tests.size() << " cases to " << argv[2] << "\n";
-            return 0;
         }
 
         if (argc != 1) {
