@@ -4,6 +4,7 @@ import ctypes
 import random
 import subprocess
 import sys
+from collections import Counter
 from pathlib import Path
 
 
@@ -45,27 +46,33 @@ def load_generator() -> ctypes.CDLL:
     generator.generator_get_cases_number.argtypes = [ctypes.c_size_t]
     generator.generator_get_cases_number.restype = ctypes.c_size_t
 
+    generator.generator_case_nodes.argtypes = [ctypes.c_size_t, ctypes.c_size_t]
+    generator.generator_case_nodes.restype = ctypes.c_size_t
+
     generator.generator_case_value.argtypes = [ctypes.c_size_t, ctypes.c_size_t, ctypes.c_char_p]
     generator.generator_case_value.restype = ctypes.c_bool
     return generator
 
 
-def random_input(bitness: int) -> bytes:
-    return "".join(random.choice("01") for _ in range(bitness)).encode("ascii")
-
-
 def main() -> None:
     generator = load_generator()
-    ser_id = 0
-    bitness = generator.generator_get_input_bitness()
-    cases_number = generator.generator_get_cases_number(ser_id)
-    case_id = random.randrange(cases_number)
 
-    print(f"ser_id: {ser_id}, case_id: {case_id}")
-    for _ in range(5):
-        input_value = random_input(bitness)
-        output = generator.generator_case_value(ser_id, case_id, input_value)
-        print(f"{input_value.decode('ascii')} -> {int(output)}")
+    ser_id = 0
+    cases_number = generator.generator_get_cases_number(ser_id)
+    node_sizes = [
+        generator.generator_case_nodes(ser_id, random.randrange(cases_number))
+        for _ in range(1024)
+    ]
+    histogram = Counter(node_sizes)
+
+    print(f"series: {ser_id}")
+    print(f"samples: {len(node_sizes)}")
+    print(f"min_nodes: {min(node_sizes)}")
+    print(f"max_nodes: {max(node_sizes)}")
+    print(f"avg_nodes: {sum(node_sizes) / len(node_sizes):.2f}")
+    print("histogram:")
+    for nodes, count in sorted(histogram.items()):
+        print(f"  {nodes}: {count}")
 
 
 if __name__ == "__main__":
