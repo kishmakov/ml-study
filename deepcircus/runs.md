@@ -12,11 +12,25 @@
 
 133'378
 
-# Using LogReg to trying to approximate number of nodes
+# Using simple network
 
-train_avg_nodes: 16.07
-test_avg_nodes: 17.33
-logreg_test_mae: 18.84
-logreg_test_mse: 3704.62
-baseline_test_mae: 25.99
-baseline_test_mse: 3237.50
+
+x_train: (8192, 21780), y_train: (8192,)
+x_test: (8192, 21780), y_test: (8192,)
+train labels: [4096 4096]
+test labels: [4096 4096]
+Epoch  10/50  loss=0.0462  elapsed=0.40s  device=cuda
+Epoch  20/50  loss=0.0269  elapsed=0.39s  device=cuda
+Epoch  30/50  loss=0.0010  elapsed=0.39s  device=cuda
+Epoch  40/50  loss=0.0009  elapsed=0.39s  device=cuda
+Epoch  50/50  loss=0.0006  elapsed=0.39s  device=cuda
+detector_test_accuracy: 0.7341
+baseline_test_accuracy: 0.5000
+              precision    recall  f1-score   support
+
+           0       0.76      0.69      0.72      4096
+           1       0.71      0.78      0.75      4096
+
+    accuracy                           0.73      8192
+   macro avg       0.74      0.73      0.73      8192
+weighted avg       0.74      0.73      0.73      819

@@ -1,21 +1,26 @@
 import ctypes
 import multiprocessing as mp
 import random
+import time
 from pathlib import Path
 
 import numpy as np
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 from sklearn.dummy import DummyClassifier
-from sklearn.linear_model import SGDClassifier
 from sklearn.metrics import accuracy_score, classification_report
 
-TRAIN_SAMPLES_PER_SERIES = 1 << 10
-TEST_SAMPLES_PER_SERIES = 1 << 9
+from experiments.model import MLPDetector
+
+TRAIN_SAMPLES_PER_SERIES = 1 << 12
+TEST_SAMPLES_PER_SERIES = 1 << 12
 RANDOM_SEED = 239
-REPS = 5
+REPS = 20
 PROCESSES = 16
 POOL_CHUNKSIZE = 1
-CACHE_DIR = Path(__file__).resolve().parents[1] / "tmp" / "experiment_pooling"
+CACHE_DIR = Path(__file__).resolve().parents[1] / "tmp"
 CACHE_FILES = {
     "x_train": CACHE_DIR / "x_train.npy",
     "y_train": CACHE_DIR / "y_train.npy",
@@ -177,16 +182,76 @@ def build_dataset(generator):
     return x_train, y_train, x_test, y_test
 
 
-def train_detector(x_train, y_train, x_test, y_test):
-    model = SGDClassifier(
-        loss="log_loss",
-        random_state=RANDOM_SEED,
-        max_iter=1000,
-        tol=1e-3,
+def train(
+    model: MLPDetector,
+    x_train: np.ndarray,
+    y_train: np.ndarray,
+    device: str,
+    *,
+    epochs: int = 50,
+    batch_size: int = 256,
+    lr: float = 1e-3,
+) -> MLPDetector:
+    model.to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    criterion = nn.BCEWithLogitsLoss()
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer,
+        patience=5,
+        factor=0.5,
     )
-    model.fit(x_train, y_train)
 
-    predictions = model.predict(x_test)
+    x = torch.tensor(x_train, dtype=torch.float32)
+    y = torch.tensor(y_train, dtype=torch.float32).unsqueeze(1)
+    loader = DataLoader(TensorDataset(x, y), batch_size=batch_size, shuffle=True)
+
+    model.train()
+    for epoch in range(1, epochs + 1):
+        epoch_start = time.perf_counter()
+        epoch_loss = 0.0
+        for xb, yb in loader:
+            xb, yb = xb.to(device), yb.to(device)
+            optimizer.zero_grad()
+            loss = criterion(model(xb), yb)
+            loss.backward()
+            optimizer.step()
+            epoch_loss += loss.item() * len(xb)
+
+        epoch_loss /= len(x)
+        scheduler.step(epoch_loss)
+        epoch_elapsed = time.perf_counter() - epoch_start
+
+        if epoch % 10 == 0:
+            print(
+                f"Epoch {epoch:>3}/{epochs}  "
+                f"loss={epoch_loss:.4f}  "
+                f"elapsed={epoch_elapsed:.2f}s  "
+                f"device={device}"
+            )
+
+    return model
+
+
+def predict(model: MLPDetector, x_test: np.ndarray, *, device: str = "cpu") -> np.ndarray:
+    model.eval()
+    x = torch.tensor(x_test, dtype=torch.float32)
+    predictions = []
+
+    with torch.no_grad():
+        for (xb,) in DataLoader(TensorDataset(x), batch_size=1024):
+            logits = model(xb.to(device))
+            batch_predictions = (torch.sigmoid(logits) >= 0.5).to(torch.int64)
+            predictions.append(batch_predictions.cpu().numpy().ravel())
+
+    return np.concatenate(predictions)
+
+
+def train_detector(x_train, y_train, x_test, y_test):
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    torch.manual_seed(RANDOM_SEED)
+    model = MLPDetector(input_dim=x_train.shape[1])
+    model = train(model, x_train, y_train, device)
+    predictions = predict(model, x_test, device=device)
 
     baseline = DummyClassifier(strategy="most_frequent")
     baseline.fit(x_train, y_train)
@@ -209,5 +274,3 @@ def run_experiment(generator):
     print(f"test labels: {np.bincount(y_test)}")
 
     train_detector(x_train, y_train, x_test, y_test)
-
-    # return x_train, y_train, x_test, y_test
