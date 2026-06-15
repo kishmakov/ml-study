@@ -7,7 +7,7 @@
 #include <string_view>
 #include <vector>
 
-const size_t kSeriesNumber = 1; // for now just one series of cases
+const size_t kSeriesNumber = 2; // for now just one series of cases
 const size_t kCasesNumber = 1ull << 32; // some technical limitation
 
 const size_t kInputBitness = 32;
@@ -112,11 +112,7 @@ Branch BuildBranch(
     return Branch{BuildNode(budget, used_bits, nodes, rng), false};
 }
 
-std::vector<Node> RandomTree(std::mt19937& rng) {
-    // Draw target size uniformly from [0, kMaxEffectiveSize - 1]
-    const size_t target_size =
-        std::uniform_int_distribution<size_t>(0, kMaxEffectiveSize - 1)(rng);
-
+std::vector<Node> RandomTree(std::mt19937& rng, size_t target_size) {
     std::vector<Node> nodes;
 
     if (target_size == 0) { // Pure leaf tree
@@ -146,14 +142,26 @@ bool EvaluateTree(const std::vector<Node>& nodes, std::string_view input) {
     }
 }
 
-bool RandomTreeCase(size_t case_id, std::string_view input) {
-    std::mt19937 rng(static_cast<uint32_t>(case_id));
-    return EvaluateTree(RandomTree(rng), input);
+inline std::mt19937 PrepRNG(size_t series_id, size_t case_id) {
+    return std::mt19937(case_id + (series_id << 30));
 }
 
-size_t RandomTreeNodes(size_t case_id) {
-    std::mt19937 rng(static_cast<uint32_t>(case_id));
-    return RandomTree(rng).size();
+inline size_t PrepSize(size_t series_id, size_t case_id, std::mt19937& rng) {
+    size_t low = series_id == 0 ? 0 : kMaxEffectiveSize - 10;
+    size_t high = series_id == 0 ? 9 : kMaxEffectiveSize - 1;
+    // Draw tree size uniformly from [low, high]
+    return std::uniform_int_distribution<size_t>(low, high)(rng);
+}
+
+bool RandomTreeCase(size_t series_id, size_t case_id, std::string_view input) {
+    std::mt19937 rng = PrepRNG(series_id, case_id);
+    const size_t size = PrepSize(series_id, case_id, rng);
+    return EvaluateTree(RandomTree(rng, size), input);
+}
+
+size_t RandomTreeNodes(size_t series_id, size_t case_id) {
+    std::mt19937 rng = PrepRNG(series_id, case_id);
+    return PrepSize(series_id, case_id, rng);
 }
 
 // API
@@ -175,12 +183,12 @@ size_t generator_case_nodes(size_t series_id, size_t case_id) {
     assert(series_id < kSeriesNumber);
     assert(case_id < kCasesNumber);
 
-    return RandomTreeNodes(case_id);
+    return RandomTreeNodes(series_id, case_id);
 }
 
 bool generator_case_value(size_t series_id, size_t case_id, const char* input) {
     assert(series_id < kSeriesNumber);
     assert(case_id < kCasesNumber);
 
-    return RandomTreeCase(case_id, std::string_view(input, kInputBitness));
+    return RandomTreeCase(series_id, case_id, std::string_view(input, kInputBitness));
 }

@@ -12,7 +12,7 @@ LIBRARY = BUILD_DIR / "libgenerator.so"
 
 sys.path.insert(0, str(DEEPCIRCUS_DIR))
 
-from experiments.experiment_pooling import run_pooling_experiment
+from experiments.experiment_pooling import run_experiment
 
 
 def load_generator() -> ctypes.CDLL:
@@ -20,6 +20,9 @@ def load_generator() -> ctypes.CDLL:
 
     generator.generator_get_input_bitness.argtypes = []
     generator.generator_get_input_bitness.restype = ctypes.c_size_t
+
+    generator.generator_get_series_number.argtypes = []
+    generator.generator_get_series_number.restype = ctypes.c_size_t
 
     generator.generator_get_cases_number.argtypes = [ctypes.c_size_t]
     generator.generator_get_cases_number.restype = ctypes.c_size_t
@@ -34,7 +37,7 @@ def load_generator() -> ctypes.CDLL:
 
 def main() -> None:
     generator = load_generator()
-    run_pooling_experiment(generator)
+    run_experiment(generator)
 
 
 if __name__ == "__main__":
