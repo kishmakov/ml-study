@@ -7,12 +7,11 @@
 #include <string_view>
 #include <vector>
 
+const size_t kSeriesNumber = 1; // for now just one series of cases
+const size_t kCasesNumber = 1ull << 32; // some technical limitation
 
 const size_t kInputBitness = 32;
-const size_t kSeriesNumber = 1;
-const size_t kCasesNumber = 1ull << 32;
-const size_t kMaxTreeDepth = kInputBitness;
-
+const size_t kMaxEffectiveSize = (1u << 16); // exclusive upper bound
 
 struct Branch {
     std::optional<size_t> nodeId;
@@ -33,30 +32,38 @@ struct Node {
 size_t RandomUnusedBit(uint32_t used_bits, std::mt19937& rng) {
     const size_t free_bits = kInputBitness - static_cast<size_t>(__builtin_popcount(used_bits));
     const size_t selected = std::uniform_int_distribution<size_t>(0, free_bits - 1)(rng);
-
     size_t seen = 0;
     for (size_t bit = 0; bit < kInputBitness; ++bit) {
-        if ((used_bits & (1u << bit)) != 0) {
-            continue;
-        }
-        if (seen == selected) {
-            return bit;
-        }
+        if ((used_bits & (1u << bit)) != 0) continue;
+         if (seen == selected) return bit;
         ++seen;
     }
-
     assert(false);
     return 0;
 }
 
-Branch BuildRandomBranch(
-    size_t depth,
+// Split a budget of (n-1) remaining nodes between two children.
+// Left child gets k nodes, right child gets (n-1-k) nodes.
+// k is drawn uniformly from [0, n-1] — this gives uniform distribution
+// over all full binary tree shapes with n internal nodes (Rémy-inspired).
+std::pair<size_t, size_t> SplitBudget(size_t n, std::mt19937& rng) {
+    // n is the number of internal nodes for this subtree (>=1, since we're building one)
+    // We spend 1 on the current node, leaving n-1 for children.
+    assert(n >= 1);
+    const size_t remaining = n - 1;
+    if (remaining == 0) return {0, 0};
+    const size_t left = std::uniform_int_distribution<size_t>(0, remaining)(rng);
+    return {left, remaining - left};
+}
+
+Branch BuildBranch(
+    size_t budget,          // number of internal nodes to use in this subtree
     uint32_t used_bits,
     std::vector<Node>& nodes,
     std::mt19937& rng);
 
-size_t BuildRandomDecisionNode(
-    size_t depth,
+size_t BuildNode(
+    size_t budget,          // >= 1
     uint32_t used_bits,
     std::vector<Node>& nodes,
     std::mt19937& rng)
@@ -64,34 +71,61 @@ size_t BuildRandomDecisionNode(
     const size_t node_id = nodes.size();
     nodes.push_back(Node{});
 
+    const size_t free_bits = kInputBitness - static_cast<size_t>(__builtin_popcount(used_bits));
+
+    // If we have no more bits to split on, this must become a leaf value
+    // (we can't honour the budget, but correctness wins over budget)
+    if (free_bits == 0) {
+        std::uniform_int_distribution<int> bool_dist(0, 1);
+        nodes[node_id].division = std::nullopt;
+        nodes[node_id].value = bool_dist(rng) != 0;
+        return node_id;
+    }
+
     const size_t bit_id = RandomUnusedBit(used_bits, rng);
     const uint32_t child_used_bits = used_bits | (1u << bit_id);
-    const Branch branch0 = BuildRandomBranch(depth + 1, child_used_bits, nodes, rng);
-    const Branch branch1 = BuildRandomBranch(depth + 1, child_used_bits, nodes, rng);
+
+    auto [left_budget, right_budget] = SplitBudget(budget, rng);
+
+    // Cap child budgets by available bits on each path
+    const size_t max_child_nodes = (1ull << free_bits) - 1; // conservative cap
+    left_budget  = std::min(left_budget,  max_child_nodes);
+    right_budget = std::min(right_budget, max_child_nodes);
+
+    const Branch branch0 = BuildBranch(left_budget,  child_used_bits, nodes, rng);
+    const Branch branch1 = BuildBranch(right_budget, child_used_bits, nodes, rng);
     nodes[node_id].division = Div{bit_id, branch0, branch1};
     return node_id;
 }
 
-Branch BuildRandomBranch(
-    size_t depth,
+Branch BuildBranch(
+    size_t budget,
     uint32_t used_bits,
     std::vector<Node>& nodes,
     std::mt19937& rng)
 {
     std::uniform_int_distribution<int> bool_dist(0, 1);
-    if (depth == kMaxTreeDepth || bool_dist(rng) == 0) {
+    if (budget == 0) {
+        // Leaf
         return Branch{std::nullopt, bool_dist(rng) != 0};
     }
-
-    return Branch{BuildRandomDecisionNode(depth, used_bits, nodes, rng), false};
+    return Branch{BuildNode(budget, used_bits, nodes, rng), false};
 }
 
 std::vector<Node> RandomTree(std::mt19937& rng) {
+    // Draw target size uniformly from [0, kMaxEffectiveSize - 1]
+    const size_t target_size =
+        std::uniform_int_distribution<size_t>(0, kMaxEffectiveSize - 1)(rng);
+
     std::vector<Node> nodes;
-    const Branch root = BuildRandomBranch(0, 0, nodes, rng);
-    if (!root.nodeId.has_value()) {
-        nodes.push_back(Node{std::nullopt, root.value});
+
+    if (target_size == 0) { // Pure leaf tree
+        std::uniform_int_distribution<int> bool_dist(0, 1);
+        nodes.push_back(Node{std::nullopt, bool_dist(rng) != 0});
+        return nodes;
     }
+
+    BuildNode(target_size, /*used_bits=*/0, nodes, rng);
     return nodes;
 }
 
