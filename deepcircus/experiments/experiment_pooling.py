@@ -1,126 +1,40 @@
-import hashlib
-import multiprocessing as mp
 import random
 import time
-from pathlib import Path
 
 import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
-from tqdm import tqdm
 from sklearn.dummy import DummyClassifier
 from sklearn.metrics import accuracy_score, classification_report
 
+from experiments.generator import generate_samples
 from experiments.model import MLPDetector
 
-TRAIN_SAMPLES_PER_BITNESS = 1 << 11
-TEST_SAMPLES_PER_BITNESS = 1 << 11
+TRAIN_SAMPLES_PER_BITNESS = 1 << 10
+TEST_SAMPLES_PER_BITNESS = 1 << 10
 RANDOM_SEED = 239
 REPS = 100
-PROCESSES = 16
-POOL_CHUNKSIZE = 1
-GENERATION_BITNESSES = (
-    4,
-    15,
-)
+
+GENERATION_BITNESSES = (4, 15)
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
-_WORKER_GENERATOR = None
-_WORKER_INPUT_BITNESS = 0
+def pad_samples(x: np.ndarray, bitness: int, target_bitness: int) -> np.ndarray:
+    if bitness == target_bitness:
+        return x
 
-
-def append_bit(point: list[float], bit: bool):
-    point.append(1.0 if bit else -1.0)
-
-
-def append_bits(points, input_bits, generator, bitness: int, case_id: int):
-    point = []
-    output_bit = generator.case_value(
-        bitness,
-        case_id,
-        input_bits[:bitness],
-    )
-    for bit in input_bits:
-        append_bit(point, bit == "1")
-
-    append_bit(point, output_bit)
-    points.append(point)
-
-
-def sample(bitness: int, case_id: int, generator, input_bitness: int):
-    rng = random.Random((bitness << 32) + case_id)
-
-    points = []
-    for _ in range(REPS):
-        input_bits = "".join(rng.choice("01") for _ in range(input_bitness))
-        append_bits(points, input_bits, generator, bitness, case_id)
-
-        flipped_bits = list(input_bits)
-        for bit_id in range(input_bitness):
-            flipped_bits[bit_id] = "0" if flipped_bits[bit_id] == "1" else "1"
-            append_bits(points, "".join(flipped_bits), generator, bitness, case_id)
-            flipped_bits[bit_id] = input_bits[bit_id]
-
-    return np.asarray(points, dtype=np.float32).ravel()
-
-
-def init_worker(generator, input_bitness: int):
-    global _WORKER_GENERATOR, _WORKER_INPUT_BITNESS
-    _WORKER_GENERATOR = generator
-    _WORKER_INPUT_BITNESS = input_bitness
-
-
-def sample_worker(task):
-    row_id, bitness_id, bitness, case_id = task
-    return (
-        row_id,
-        bitness_id,
-        sample(bitness, case_id, _WORKER_GENERATOR, _WORKER_INPUT_BITNESS),
-    )
-
-
-def build_split(generator, split_specs, split_name: str):
-    input_bitness = max(GENERATION_BITNESSES)
-    feature_size = REPS * (input_bitness + 1) * (input_bitness + 1)
-    total_samples = sum(len(case_ids) for _, _, case_ids in split_specs)
-    x = np.empty((total_samples, feature_size), dtype=np.float32)
-    y = np.empty(total_samples, dtype=np.int64)
-
-    def tasks():
-        row_id = 0
-        max_cases = max(len(case_ids) for _, _, case_ids in split_specs)
-        for case_index in range(max_cases):
-            for bitness_id, bitness, case_ids in split_specs:
-                if case_index < len(case_ids):
-                    yield row_id, bitness_id, bitness, case_ids[case_index]
-                    row_id += 1
-
-    context = mp.get_context("fork")
-    with context.Pool(
-        processes=PROCESSES,
-        initializer=init_worker,
-        initargs=(generator, input_bitness),
-    ) as pool:
-        print(
-            f"Generating {total_samples} {split_name} feature vectors "
-            f"with {PROCESSES} processes"
-        )
-        results = pool.imap_unordered(sample_worker, tasks(), chunksize=POOL_CHUNKSIZE)
-        for row_id, bitness_id, features in tqdm(
-            results,
-            total=total_samples,
-            desc=f"{split_name} features",
-        ):
-            x[row_id] = features
-            y[row_id] = bitness_id
-
-    return x, y
+    source_side = bitness + 1
+    target_side = target_bitness + 1
+    reshaped = x.reshape(len(x), REPS, source_side, source_side)
+    padded = np.zeros((len(x), REPS, target_side, target_side), dtype=np.float32)
+    padded[:, :, :source_side, :source_side] = reshaped
+    return padded.reshape(len(x), REPS * target_side * target_side)
 
 
 def build_dataset(generator):
+    target_bitness = max(GENERATION_BITNESSES)
     train_specs = []
     test_specs = []
 
@@ -134,16 +48,46 @@ def build_dataset(generator):
         train_specs.append((bitness_id, bitness, case_ids[:TRAIN_SAMPLES_PER_BITNESS]))
         test_specs.append((bitness_id, bitness, case_ids[TRAIN_SAMPLES_PER_BITNESS:]))
 
-    x_train, y_train = build_split(
-        generator,
-        train_specs,
-        "train",
-    )
-    x_test, y_test = build_split(
-        generator,
-        test_specs,
-        "test",
-    )
+    x_train_parts = []
+    y_train_parts = []
+    for bitness_id, bitness, case_ids in train_specs:
+        x_train_parts.append(
+            pad_samples(
+                generate_samples(
+                    generator,
+                    bitness,
+                    case_ids=case_ids,
+                    reps=REPS,
+                    split_name="train",
+                ),
+                bitness,
+                target_bitness,
+            )
+        )
+        y_train_parts.append(np.full(len(case_ids), bitness_id, dtype=np.int64))
+
+    x_test_parts = []
+    y_test_parts = []
+    for bitness_id, bitness, case_ids in test_specs:
+        x_test_parts.append(
+            pad_samples(
+                generate_samples(
+                    generator,
+                    bitness,
+                    case_ids=case_ids,
+                    reps=REPS,
+                    split_name="test",
+                ),
+                bitness,
+                target_bitness,
+            )
+        )
+        y_test_parts.append(np.full(len(case_ids), bitness_id, dtype=np.int64))
+
+    x_train = np.concatenate(x_train_parts, axis=0)
+    y_train = np.concatenate(y_train_parts, axis=0)
+    x_test = np.concatenate(x_test_parts, axis=0)
+    y_test = np.concatenate(y_test_parts, axis=0)
 
     return x_train, y_train, x_test, y_test
 

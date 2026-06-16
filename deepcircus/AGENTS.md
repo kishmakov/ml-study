@@ -21,7 +21,7 @@ This is a research project to study ML approach to handle decision trees.
 - `generator/decision_tree.{h,cpp}` owns `DecisionTree`, `Div`, `Node`, and tree evaluation/building
 - `generator/small_bitness.{h,cpp}` owns exact small-bitness solving and cache read/write
 - `generator/generator.{h,cpp}` owns the public C API and main generation dispatch
-- `experiments/generator.py` owns generator loading, ctypes signatures, and the Python generator wrapper
+- `experiments/generator.py` owns generator loading, ctypes signatures, the Python generator wrapper, and sample generation helpers
 - `experiments/experiment_*.py` should contain experiment logic only; do not put ctypes or shared-library details there
 - `scripts/*.py` should stay thin entrypoints over experiment/generator helpers
 - `scripts/inspect.py` inspects small-bitness trees via `experiments.generator`
