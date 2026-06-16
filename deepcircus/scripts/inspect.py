@@ -5,6 +5,8 @@ import sys
 from pathlib import Path
 
 
+SCRIPT_DIR = str(Path(__file__).resolve().parent)
+sys.path = [path for path in sys.path if path != SCRIPT_DIR]
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from experiments.generator import load_generator
@@ -36,7 +38,7 @@ def main() -> None:
     for input_id in range(1 << args.bitness):
         bits = input_bits(input_id, args.bitness)
         value = generator.case_value(args.bitness, args.case_id, bits)
-        print(f"{bits} -> {int(value)}")
+        print(f"{bits} -> {int(value[args.bitness] > 0)}")
 
 
 if __name__ == "__main__":

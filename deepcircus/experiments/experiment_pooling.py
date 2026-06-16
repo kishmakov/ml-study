@@ -10,7 +10,7 @@ from experiments.generator import (
     generate_ids,
     generate_sample_tensors,
     generate_samples,
-    sample_restriction,
+    sample_restrictions,
 )
 from experiments.model import DeepSetPredictor
 
@@ -60,20 +60,16 @@ def approximate_targets(generator, bitness: int, case_ids: list[int]) -> np.ndar
         batch_ids = case_ids[start : start + TARGET_CASE_BATCH_SIZE]
         restricted_samples = []
         for case_id in batch_ids:
-            for fixed_bit_id in range(bitness):
-                for fixed_bit_value in (0, 1):
-                    restricted_samples.append(
-                        sample_restriction(
-                            generator,
-                            bitness,
-                            case_id,
-                            fixed_bit_id,
-                            fixed_bit_value,
-                            REPS,
-                        )
-                    )
+            restricted_samples.append(
+                sample_restrictions(
+                    generator,
+                    bitness,
+                    case_id,
+                    REPS,
+                )
+            )
 
-        x_restricted = np.stack(restricted_samples, axis=0)
+        x_restricted = np.concatenate(restricted_samples, axis=0)
         predictions = predict_values(previous_model, x_restricted)
         predictions = predictions.reshape(len(batch_ids), bitness, 2)
         branch_sizes = np.maximum(np.expm1(predictions), 0.0)

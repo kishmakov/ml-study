@@ -18,8 +18,11 @@ size_t generator_case_nodes(uint16_t bitness, size_t case_id);
 // Returns masked representation of active bits
 const char* generator_case_active_bits(uint16_t bitness, size_t case_id);
 
-// Computes function value for given case
-bool generator_case_value(uint16_t bitness, size_t case_id, const char* input);
+// Computes adjacent sample points for given case as ASCII 0/1 bytes
+const char* generator_case_value(uint16_t bitness, size_t case_id, const char* input);
+
+// Computes all restriction sample points for one rep as ASCII 0/1 bytes
+const char* generator_case_restrictions(uint16_t bitness, size_t case_id, size_t rep);
 
 #ifdef __cplusplus
 }

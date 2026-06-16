@@ -40,7 +40,14 @@ class Generator:
             ctypes.c_size_t,
             ctypes.c_char_p,
         ]
-        library.generator_case_value.restype = ctypes.c_bool
+        library.generator_case_value.restype = ctypes.c_char_p
+
+        library.generator_case_restrictions.argtypes = [
+            ctypes.c_uint16,
+            ctypes.c_size_t,
+            ctypes.c_size_t,
+        ]
+        library.generator_case_restrictions.restype = ctypes.c_char_p
         return library
 
     def cases_number(self, bitness: int) -> int:
@@ -52,37 +59,38 @@ class Generator:
     def case_active_bits(self, bitness: int, case_id: int) -> str:
         return self.library.generator_case_active_bits(bitness, case_id).decode("ascii")
 
-    def case_value(self, bitness: int, case_id: int, input_bits: str) -> bool:
-        return bool(
-            self.library.generator_case_value(
-                bitness,
-                case_id,
-                input_bits.encode("ascii"),
-            )
+    def case_value(self, bitness: int, case_id: int, input_bits: str) -> np.ndarray:
+        value = self.library.generator_case_value(
+            bitness,
+            case_id,
+            input_bits.encode("ascii"),
         )
+        return _ascii_bits_to_signed(value, (bitness + 1) * (bitness + 1))
+
+    def case_restrictions(self, bitness: int, case_id: int, rep: int) -> np.ndarray:
+        value = self.library.generator_case_restrictions(
+            bitness,
+            case_id,
+            rep,
+        )
+        point_dim = bitness * bitness
+        signed = _ascii_bits_to_signed(value, bitness * 2 * point_dim)
+        return signed.reshape(bitness * 2, point_dim)
 
 
 def load_generator() -> Generator:
     return Generator(LIBRARY)
 
 
-def _append_bit(point: list[float], bit: bool):
-    point.append(1.0 if bit else -1.0)
-
-
-def _append_bits(points, input_bits: str, value_fn: Callable[[str], bool]):
-    point = []
-    output_bit = value_fn(input_bits)
-    for bit in input_bits:
-        _append_bit(point, bit == "1")
-
-    _append_bit(point, output_bit)
-    points.append(point)
+def _ascii_bits_to_signed(value: bytes, expected_len: int) -> np.ndarray:
+    assert len(value) == expected_len
+    bits = np.frombuffer(value, dtype=np.uint8).astype(np.int8) - ord("0")
+    return bits * 2 - 1
 
 
 def _sample_function(
     bitness: int,
-    value_fn: Callable[[str], bool],
+    value_fn: Callable[[str], np.ndarray],
     reps: int,
     seed: int,
 ) -> np.ndarray:
@@ -90,17 +98,8 @@ def _sample_function(
     point_dim = (bitness + 1) * (bitness + 1)
     samples = np.empty((reps, point_dim), dtype=np.float32)
     for rep_id in range(reps):
-        points = []
         input_bits = "".join(rng.choice("01") for _ in range(bitness))
-        _append_bits(points, input_bits, value_fn)
-
-        flipped_bits = list(input_bits)
-        for bit_id in range(bitness):
-            flipped_bits[bit_id] = "0" if flipped_bits[bit_id] == "1" else "1"
-            _append_bits(points, "".join(flipped_bits), value_fn)
-            flipped_bits[bit_id] = input_bits[bit_id]
-
-        samples[rep_id] = np.asarray(points, dtype=np.float32).ravel()
+        samples[rep_id] = value_fn(input_bits)
 
     return samples
 
@@ -124,22 +123,34 @@ def sample_restriction(
 ) -> np.ndarray:
     assert 0 <= fixed_bit_id < bitness
     assert fixed_bit_value in (0, 1)
+    restriction_id = fixed_bit_id * 2 + fixed_bit_value
+    point_dim = bitness * bitness
+    samples = np.empty((reps, point_dim), dtype=np.float32)
+    for rep in range(reps):
+        samples[rep] = generator.case_restrictions(
+            bitness,
+            case_id,
+            rep,
+        )[restriction_id]
+    return samples
 
-    def value_fn(input_bits: str) -> bool:
-        full_input_bits = (
-            input_bits[:fixed_bit_id]
-            + str(fixed_bit_value)
-            + input_bits[fixed_bit_id:]
+
+def sample_restrictions(
+    generator: Generator,
+    bitness: int,
+    case_id: int,
+    reps: int,
+) -> np.ndarray:
+    point_dim = bitness * bitness
+    samples = np.empty((bitness * 2, reps, point_dim), dtype=np.float32)
+    for rep in range(reps):
+        value = generator.case_restrictions(
+            bitness,
+            case_id,
+            rep,
         )
-        return generator.case_value(bitness, case_id, full_input_bits)
-
-    seed = (
-        (bitness << 48)
-        + (case_id << 8)
-        + (fixed_bit_id << 1)
-        + fixed_bit_value
-    )
-    return _sample_function(bitness - 1, value_fn, reps, seed)
+        samples[:, rep, :] = value
+    return samples
 
 
 def generate_ids(
