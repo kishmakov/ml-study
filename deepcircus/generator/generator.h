@@ -16,6 +16,9 @@ size_t generator_get_cases_number(size_t series_id);
 // Computes number of nodes for given case
 size_t generator_case_nodes(size_t series_id, size_t case_id);
 
+// Returns masked representation of active bits
+const char* generator_case_active_bits(size_t series_id, size_t case_id);
+
 // Computes function value for given case
 bool generator_case_value(size_t series_id, size_t case_id, const char* input);
 

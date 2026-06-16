@@ -30,6 +30,9 @@ def load_generator() -> ctypes.CDLL:
     generator.generator_case_nodes.argtypes = [ctypes.c_size_t, ctypes.c_size_t]
     generator.generator_case_nodes.restype = ctypes.c_size_t
 
+    generator.generator_case_active_bits.argtypes = [ctypes.c_size_t, ctypes.c_size_t]
+    generator.generator_case_active_bits.restype = ctypes.c_char_p
+
     generator.generator_case_value.argtypes = [ctypes.c_size_t, ctypes.c_size_t, ctypes.c_char_p]
     generator.generator_case_value.restype = ctypes.c_bool
     return generator

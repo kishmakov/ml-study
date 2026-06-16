@@ -53,6 +53,11 @@ def append_bits(points, input_bits, generator, series_id, case_id):
 def sample(series_id: int, case_id: int, generator, input_bitness: int):
     rng = random.Random((series_id << 32) + case_id)
 
+    # num_vertices = generator.generator_case_nodes(series_id, case_id)
+    # active_bits = generator.generator_case_active_bits(series_id, case_id).decode("ascii")
+
+    # print(f"series={series_id} case={case_id} vertices={num_vertices} active={active_bits}")
+
     points = []
     for _ in range(REPS):
         input_bits = "".join(rng.choice("01") for _ in range(input_bitness))
@@ -68,6 +73,21 @@ def sample(series_id: int, case_id: int, generator, input_bitness: int):
 
 
 def configure_worker_generator(generator):
+    generator.generator_get_input_bitness.argtypes = []
+    generator.generator_get_input_bitness.restype = ctypes.c_size_t
+
+    generator.generator_get_series_number.argtypes = []
+    generator.generator_get_series_number.restype = ctypes.c_size_t
+
+    generator.generator_get_cases_number.argtypes = [ctypes.c_size_t]
+    generator.generator_get_cases_number.restype = ctypes.c_size_t
+
+    generator.generator_case_nodes.argtypes = [ctypes.c_size_t, ctypes.c_size_t]
+    generator.generator_case_nodes.restype = ctypes.c_size_t
+
+    generator.generator_case_active_bits.argtypes = [ctypes.c_size_t, ctypes.c_size_t]
+    generator.generator_case_active_bits.restype = ctypes.c_char_p
+
     generator.generator_case_value.argtypes = [
         ctypes.c_size_t,
         ctypes.c_size_t,
@@ -178,7 +198,7 @@ def build_dataset(generator):
         "test",
     )
 
-    save_cached_dataset(x_train, y_train, x_test, y_test)
+    # save_cached_dataset(x_train, y_train, x_test, y_test)
     return x_train, y_train, x_test, y_test
 
 
