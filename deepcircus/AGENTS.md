@@ -12,7 +12,9 @@ This is a research project to study ML approach to handle decision trees.
 - The generator API is bitness-based: use `uint16_t bitness`, not series ids or bit masks
 - `generator_case_value` receives exactly `bitness` input characters
 - Bitness is always a parameter
-- For bitness `0..4`, generate exact truth-table trees and cache them under `tmp/bN`
+- Python sample-generation multiprocessing uses a `fork` process pool; keep worker helpers in `experiments/generator.py`
+- Assign reduced-sample generation work to workers by `case_id % processes`
+- For bitness `0..4`, generate exact truth-table trees and cache them under `tmp/small_trees.treepack`
 - For larger bitness, use the random tree generator over bits `0..bitness-1`
 
 # Code Layout

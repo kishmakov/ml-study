@@ -8,9 +8,10 @@ from tqdm import tqdm
 
 from experiments.generator import (
     generate_ids,
+    generate_restriction_tensors,
     generate_sample_tensors,
     generate_samples,
-    sample_restrictions,
+    make_restriction_pool,
 )
 from experiments.model import DeepSetPredictor
 
@@ -28,6 +29,7 @@ THRESHOLD = 0.05
 
 PREDICT_BATCH_SIZE = 1024
 TARGET_CASE_BATCH_SIZE = 128
+TARGET_PROCESSES = 16
 
 
 def predict_values(model: nn.Module, x: np.ndarray) -> np.ndarray:
@@ -50,31 +52,31 @@ def predict_values(model: nn.Module, x: np.ndarray) -> np.ndarray:
 
 def approximate_targets(generator, bitness: int, case_ids: list[int]) -> np.ndarray:
     previous_model = MODELS.get(bitness - 1)
-    if previous_model is None:
-        raise ValueError(f"Missing model for bitness {bitness - 1}")
+    assert previous_model, f"Missing model for bitness {bitness - 1}"
 
     target_parts = []
     ranges = range(0, len(case_ids), TARGET_CASE_BATCH_SIZE)
     total_batches = (len(case_ids) + TARGET_CASE_BATCH_SIZE - 1) // TARGET_CASE_BATCH_SIZE
-    for start in tqdm(ranges, total=total_batches, desc=f"targets b={bitness}"):
-        batch_ids = case_ids[start : start + TARGET_CASE_BATCH_SIZE]
-        restricted_samples = []
-        for case_id in batch_ids:
-            restricted_samples.append(
-                sample_restrictions(
-                    generator,
-                    bitness,
-                    case_id,
-                    REPS,
-                )
-            )
 
-        x_restricted = np.concatenate(restricted_samples, axis=0)
-        predictions = predict_values(previous_model, x_restricted)
-        predictions = predictions.reshape(len(batch_ids), bitness, 2)
-        branch_sizes = np.maximum(np.expm1(predictions), 0.0)
-        split_sizes = 1.0 + branch_sizes.sum(axis=2)
-        target_parts.append(np.log1p(split_sizes.min(axis=1)))
+    with make_restriction_pool(generator, TARGET_PROCESSES) as pool:
+        print(
+            f"Generating reduced samples for {len(case_ids)} targets "
+            f"at bitness {bitness} with {TARGET_PROCESSES} processes"
+        )
+        for start in tqdm(ranges, total=total_batches, desc=f"targets b={bitness}"):
+            batch_ids = case_ids[start : start + TARGET_CASE_BATCH_SIZE]
+            x_restricted = generate_restriction_tensors(
+                pool,
+                bitness,
+                batch_ids,
+                REPS,
+                TARGET_PROCESSES,
+            )
+            predictions = predict_values(previous_model, x_restricted)
+            predictions = predictions.reshape(len(batch_ids), bitness, 2)
+            branch_sizes = np.maximum(np.expm1(predictions), 0.0)
+            split_sizes = 1.0 + branch_sizes.sum(axis=2)
+            target_parts.append(np.log1p(split_sizes.min(axis=1)))
 
     return np.concatenate(target_parts).astype(np.float32)
 
@@ -140,6 +142,7 @@ def train(
 
         if epoch_loss < THRESHOLD:
             break
+
 
 def run_experiment(generator):
     SEED_OFFSET = 239

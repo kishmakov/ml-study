@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import multiprocessing as mp
 import numpy as np
 import random
 from collections.abc import Callable
@@ -10,6 +11,8 @@ from tqdm import tqdm
 
 DEEPCIRCUS_DIR = Path(__file__).resolve().parents[1]
 LIBRARY = DEEPCIRCUS_DIR / "build" / "libgenerator.so"
+
+_WORKER_GENERATOR = None
 
 
 class Generator:
@@ -82,6 +85,39 @@ def load_generator() -> Generator:
     return Generator(LIBRARY)
 
 
+def _init_worker(generator: Generator):
+    global _WORKER_GENERATOR
+    _WORKER_GENERATOR = generator
+
+
+def _sample_restrictions_worker(task):
+    worker_id, processes, bitness, indexed_case_ids, reps = task
+    results = []
+    for row_id, case_id in indexed_case_ids:
+        assert case_id % processes == worker_id
+        results.append(
+            (
+                row_id,
+                sample_restrictions(
+                    _WORKER_GENERATOR,
+                    bitness,
+                    case_id,
+                    reps,
+                ),
+            )
+        )
+    return results
+
+
+def make_restriction_pool(generator: Generator, processes: int):
+    context = mp.get_context("fork")
+    return context.Pool(
+        processes=processes,
+        initializer=_init_worker,
+        initargs=(generator,),
+    )
+
+
 def _ascii_bits_to_signed(value: bytes, expected_len: int) -> np.ndarray:
     assert len(value) == expected_len
     bits = np.frombuffer(value, dtype=np.uint8).astype(np.int8) - ord("0")
@@ -151,6 +187,37 @@ def sample_restrictions(
         )
         samples[:, rep, :] = value
     return samples
+
+
+def generate_restriction_tensors(
+    pool,
+    bitness: int,
+    case_ids: list[int],
+    reps: int,
+    processes: int,
+) -> np.ndarray:
+    point_dim = bitness * bitness
+    restrictions_per_case = bitness * 2
+    x = np.empty(
+        (len(case_ids) * restrictions_per_case, reps, point_dim),
+        dtype=np.float32,
+    )
+
+    buckets = [[] for _ in range(processes)]
+    for row_id, case_id in enumerate(case_ids):
+        buckets[case_id % processes].append((row_id, case_id))
+
+    tasks = (
+        (worker_id, processes, bitness, indexed_case_ids, reps)
+        for worker_id, indexed_case_ids in enumerate(buckets)
+        if indexed_case_ids
+    )
+    for results in pool.imap_unordered(_sample_restrictions_worker, tasks, chunksize=1):
+        for row_id, samples in results:
+            start = row_id * restrictions_per_case
+            x[start : start + restrictions_per_case] = samples
+
+    return x
 
 
 def generate_ids(
