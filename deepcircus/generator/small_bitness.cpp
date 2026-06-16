@@ -1,6 +1,7 @@
 #include "small_bitness.h"
 
 #include <cassert>
+#include <cstring>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -8,6 +9,12 @@
 #include <string>
 #include <unordered_map>
 #include <utility>
+#include <vector>
+
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 struct SelectedBits {
     uint16_t mask = 0;
@@ -149,31 +156,84 @@ private:
     std::unordered_map<SelectedBits, StatePlan, SelectedBitsHash> plan_memo_;
 };
 
-std::filesystem::path CacheDir(uint16_t bitness) {
+std::filesystem::path CacheDir() {
     const std::filesystem::path cwd = std::filesystem::current_path();
-    const std::filesystem::path tmp = cwd / "deepcircus" / "tmp";
-    return tmp / ("b" + std::to_string(bitness));
+    return cwd / "tmp";
 }
 
-std::filesystem::path CachePath(uint16_t bitness, uint64_t truth_table) {
-    return CacheDir(bitness) / ("table_" + std::to_string(truth_table) + ".tree");
+std::filesystem::path CachePath() {
+    return CacheDir() / "small_trees.treepack";
 }
 
-bool SaveTree(const DecisionTree& tree, const std::filesystem::path& path) {
-    std::error_code error;
-    std::filesystem::create_directories(path.parent_path(), error);
-    if (error) {
+uint64_t StreamOffset(std::streampos pos) {
+    return static_cast<uint64_t>(static_cast<std::streamoff>(pos));
+}
+
+class MappedFile {
+public:
+    explicit MappedFile(const std::filesystem::path& path) {
+        const std::string path_string = path.string();
+        fd_ = open(path_string.c_str(), O_RDONLY);
+        if (fd_ < 0) {
+            return;
+        }
+
+        struct stat status;
+        if (fstat(fd_, &status) != 0 || status.st_size <= 0) {
+            return;
+        }
+
+        size_ = static_cast<size_t>(status.st_size);
+        data_ = mmap(nullptr, size_, PROT_READ, MAP_PRIVATE, fd_, 0);
+        if (data_ == MAP_FAILED) {
+            data_ = nullptr;
+            size_ = 0;
+        }
+    }
+
+    ~MappedFile() {
+        if (data_ != nullptr) {
+            munmap(data_, size_);
+        }
+        if (fd_ >= 0) {
+            close(fd_);
+        }
+    }
+
+    MappedFile(const MappedFile&) = delete;
+    MappedFile& operator=(const MappedFile&) = delete;
+
+    explicit operator bool() const {
+        return data_ != nullptr;
+    }
+
+    const uint8_t* Data() const {
+        return static_cast<const uint8_t*>(data_);
+    }
+
+    size_t Size() const {
+        return size_;
+    }
+
+private:
+    int fd_ = -1;
+    void* data_ = nullptr;
+    size_t size_ = 0;
+};
+
+template <class T>
+bool ReadPod(const uint8_t*& cursor, const uint8_t* end, T& value) {
+    if (cursor > end || static_cast<size_t>(end - cursor) < sizeof(T)) {
         return false;
     }
 
-    std::ofstream out(path, std::ios::binary);
-    if (!out) {
-        return false;
-    }
+    std::memcpy(&value, cursor, sizeof(T));
+    cursor += sizeof(T);
+    return true;
+}
 
-    const uint32_t magic = 0x44544731; // DTG1
+bool WriteTree(std::ostream& out, const DecisionTree& tree) {
     const uint64_t node_count = tree.nodes.size();
-    out.write(reinterpret_cast<const char*>(&magic), sizeof(magic));
     out.write(reinterpret_cast<const char*>(&node_count), sizeof(node_count));
     for (const Node& node : tree.nodes) {
         const Div* division = std::get_if<Div>(&node);
@@ -195,17 +255,10 @@ bool SaveTree(const DecisionTree& tree, const std::filesystem::path& path) {
     return out.good();
 }
 
-bool LoadTree(uint16_t bitness, const std::filesystem::path& path, DecisionTree& tree) {
-    std::ifstream in(path, std::ios::binary);
-    if (!in) {
-        return false;
-    }
-
-    uint32_t magic = 0;
+bool ReadTree(const uint8_t*& cursor, const uint8_t* end, uint16_t bitness, DecisionTree& tree) {
     uint64_t node_count = 0;
-    in.read(reinterpret_cast<char*>(&magic), sizeof(magic));
-    in.read(reinterpret_cast<char*>(&node_count), sizeof(node_count));
-    if (!in || magic != 0x44544731) {
+    if (!ReadPod(cursor, end, node_count) ||
+        node_count > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
         return false;
     }
 
@@ -214,15 +267,13 @@ bool LoadTree(uint16_t bitness, const std::filesystem::path& path, DecisionTree&
 
     for (uint64_t node_id = 0; node_id < node_count; ++node_id) {
         uint8_t type = 0;
-        in.read(reinterpret_cast<char*>(&type), sizeof(type));
-        if (!in) {
+        if (!ReadPod(cursor, end, type)) {
             return false;
         }
 
         if (type == 0) {
             uint8_t value = 0;
-            in.read(reinterpret_cast<char*>(&value), sizeof(value));
-            if (!in) {
+            if (!ReadPod(cursor, end, value)) {
                 return false;
             }
             loaded.nodes.push_back(value != 0);
@@ -231,10 +282,10 @@ bool LoadTree(uint16_t bitness, const std::filesystem::path& path, DecisionTree&
             uint16_t bit_id = 0;
             uint64_t child0 = 0;
             uint64_t child1 = 0;
-            in.read(reinterpret_cast<char*>(&bit_id), sizeof(bit_id));
-            in.read(reinterpret_cast<char*>(&child0), sizeof(child0));
-            in.read(reinterpret_cast<char*>(&child1), sizeof(child1));
-            if (!in || bit_id >= bitness || child0 >= node_count || child1 >= node_count) {
+            if (!ReadPod(cursor, end, bit_id) ||
+                !ReadPod(cursor, end, child0) ||
+                !ReadPod(cursor, end, child1) ||
+                bit_id >= bitness || child0 >= node_count || child1 >= node_count) {
                 return false;
             }
             loaded.nodes.push_back(Div{bit_id, static_cast<size_t>(child0), static_cast<size_t>(child1)});
@@ -246,6 +297,126 @@ bool LoadTree(uint16_t bitness, const std::filesystem::path& path, DecisionTree&
 
     tree = std::move(loaded);
     return true;
+}
+
+bool SaveTrees(const std::filesystem::path& path) {
+    std::error_code error;
+    std::filesystem::create_directories(path.parent_path(), error);
+    if (error) {
+        return false;
+    }
+
+    const uint32_t magic = 0x44544734; // DTG4
+    const uint16_t max_bitness = kExactTableBitness;
+
+    const std::filesystem::path tmp_path = path.parent_path() / (path.filename().string() + ".tmp");
+    {
+        std::ofstream out(tmp_path, std::ios::binary);
+        if (!out) {
+            return false;
+        }
+
+        out.write(reinterpret_cast<const char*>(&magic), sizeof(magic));
+        out.write(reinterpret_cast<const char*>(&max_bitness), sizeof(max_bitness));
+        for (uint16_t bitness = 0; bitness <= kExactTableBitness; ++bitness) {
+            const uint64_t cases_number = SmallBitnessCasesNumber(bitness);
+            const uint64_t empty_offset = 0;
+            out.write(reinterpret_cast<const char*>(&bitness), sizeof(bitness));
+            out.write(reinterpret_cast<const char*>(&cases_number), sizeof(cases_number));
+            const std::streampos group_end_pos = out.tellp();
+            out.write(reinterpret_cast<const char*>(&empty_offset), sizeof(empty_offset));
+
+            const std::streampos offsets_pos = out.tellp();
+            for (uint64_t case_id = 0; case_id < cases_number; ++case_id) {
+                out.write(reinterpret_cast<const char*>(&empty_offset), sizeof(empty_offset));
+            }
+
+            std::vector<uint64_t> offsets;
+            offsets.reserve(static_cast<size_t>(cases_number));
+            for (uint64_t case_id = 0; case_id < cases_number; ++case_id) {
+                offsets.push_back(StreamOffset(out.tellp()));
+                const DecisionTree tree = TableTreeBuilder(bitness, case_id).Build();
+                if (!WriteTree(out, tree)) {
+                    return false;
+                }
+            }
+
+            const uint64_t group_end = StreamOffset(out.tellp());
+            out.seekp(group_end_pos);
+            out.write(reinterpret_cast<const char*>(&group_end), sizeof(group_end));
+            out.seekp(offsets_pos);
+            for (uint64_t offset : offsets) {
+                out.write(reinterpret_cast<const char*>(&offset), sizeof(offset));
+            }
+            out.seekp(static_cast<std::streamoff>(group_end));
+        }
+
+        if (!out.good()) {
+            return false;
+        }
+    }
+
+    std::filesystem::rename(tmp_path, path, error);
+    return !error;
+}
+
+bool LoadTree(uint16_t bitness, size_t case_id, const std::filesystem::path& path, DecisionTree& tree) {
+    const MappedFile file(path);
+    if (!file) {
+        return false;
+    }
+
+    const uint8_t* const begin = file.Data();
+    const uint8_t* const end = begin + file.Size();
+    const uint8_t* cursor = begin;
+
+    uint32_t magic = 0;
+    uint16_t max_bitness = 0;
+    if (!ReadPod(cursor, end, magic) ||
+        !ReadPod(cursor, end, max_bitness) ||
+        magic != 0x44544734 || max_bitness != kExactTableBitness) {
+        return false;
+    }
+
+    for (uint16_t group_bitness = 0; group_bitness <= kExactTableBitness; ++group_bitness) {
+        uint16_t stored_bitness = 0;
+        uint64_t cases_number = 0;
+        uint64_t group_end = 0;
+        if (!ReadPod(cursor, end, stored_bitness) ||
+            !ReadPod(cursor, end, cases_number) ||
+            !ReadPod(cursor, end, group_end) ||
+            stored_bitness != group_bitness ||
+            cases_number != SmallBitnessCasesNumber(group_bitness) ||
+            group_end < static_cast<uint64_t>(cursor - begin) ||
+            group_end > file.Size()) {
+            return false;
+        }
+
+        if (stored_bitness != bitness) {
+            cursor = begin + group_end;
+            continue;
+        }
+
+        if (case_id >= cases_number) {
+            return false;
+        }
+        const uint64_t offsets_pos = static_cast<uint64_t>(cursor - begin);
+        const uint64_t offset_pos = offsets_pos + static_cast<uint64_t>(case_id) * sizeof(uint64_t);
+        if (offset_pos + sizeof(uint64_t) > group_end) {
+            return false;
+        }
+
+        uint64_t tree_offset = 0;
+        const uint8_t* offset_cursor = begin + offset_pos;
+        if (!ReadPod(offset_cursor, end, tree_offset) || tree_offset >= group_end) {
+            return false;
+        }
+
+        const uint8_t* tree_cursor = begin + tree_offset;
+        return ReadTree(tree_cursor, begin + group_end, bitness, tree);
+    }
+
+    return false;
 }
 
 bool IsSmallBitness(uint16_t bitness) {
@@ -262,12 +433,16 @@ DecisionTree SmallBitnessTree(uint16_t bitness, size_t case_id) {
     assert(case_id < SmallBitnessCasesNumber(bitness));
 
     DecisionTree tree(bitness);
-    const std::filesystem::path path = CachePath(bitness, case_id);
-    if (LoadTree(bitness, path, tree)) {
+    const std::filesystem::path path = CachePath();
+    if (LoadTree(bitness, case_id, path, tree)) {
+        return tree;
+    }
+
+    (void)SaveTrees(path);
+    if (LoadTree(bitness, case_id, path, tree)) {
         return tree;
     }
 
     tree = TableTreeBuilder(bitness, case_id).Build();
-    (void)SaveTree(tree, path);
     return tree;
 }
