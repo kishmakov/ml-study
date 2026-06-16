@@ -7,23 +7,13 @@
 
 namespace {
 
-void ValidateBitness(uint16_t bitness) {
-    assert(bitness <= kInputBitness);
-}
-
-size_t CountBits(uint32_t bits) {
-    return static_cast<size_t>(__builtin_popcount(bits));
-}
-
-size_t RandomUnusedBit(uint32_t allowed_bits, uint32_t used_bits, std::mt19937& rng) {
-    const uint32_t free_mask = allowed_bits & ~used_bits;
-    const size_t free_bits = CountBits(free_mask);
+size_t RandomUnusedBit(const std::vector<bool>& path_used_bits, size_t free_bits, std::mt19937& rng) {
     assert(free_bits > 0);
 
     const size_t selected = std::uniform_int_distribution<size_t>(0, free_bits - 1)(rng);
     size_t seen = 0;
-    for (size_t bit = 0; bit < kInputBitness; ++bit) {
-        if ((free_mask & (1u << bit)) == 0) continue;
+    for (size_t bit = 0; bit < path_used_bits.size(); ++bit) {
+        if (path_used_bits[bit]) continue;
         if (seen == selected) return bit;
         ++seen;
     }
@@ -43,13 +33,19 @@ std::pair<size_t, size_t> SplitBudget(size_t n, std::mt19937& rng) {
     return {left, remaining - left};
 }
 
+size_t MaxInternalNodes(size_t free_bits) {
+    if (free_bits >= std::numeric_limits<size_t>::digits) {
+        return std::numeric_limits<size_t>::max();
+    }
+    return (size_t{1} << free_bits) - 1;
+}
+
 }  // namespace
 
 DecisionTree::DecisionTree(uint16_t bitness)
     : used_bits(bitness, false)
     , bitness_(bitness)
 {
-    ValidateBitness(bitness_);
 }
 
 uint16_t DecisionTree::Bitness() const {
@@ -65,12 +61,15 @@ size_t DecisionTree::AddLeaf(bool value) {
 
 size_t DecisionTree::BuildSubtree(
     size_t budget,
-    uint32_t allowed_bits,
-    uint32_t path_used_bits,
+    std::vector<bool>& path_used_bits,
+    size_t path_used_count,
     bool required_value,
     std::mt19937& rng)
 {
-    const size_t free_bits = CountBits(allowed_bits & ~path_used_bits);
+    assert(path_used_bits.size() == bitness_);
+    assert(path_used_count <= bitness_);
+
+    const size_t free_bits = bitness_ - path_used_count;
     if (budget == 0 || free_bits == 0) {
         return AddLeaf(required_value);
     }
@@ -78,13 +77,13 @@ size_t DecisionTree::BuildSubtree(
     const size_t node_id = nodes.size();
     nodes.push_back(false);
 
-    const size_t bit_id = RandomUnusedBit(allowed_bits, path_used_bits, rng);
+    const size_t bit_id = RandomUnusedBit(path_used_bits, free_bits, rng);
     used_bits[bit_id] = true;
-    const uint32_t child_used_bits = path_used_bits | (1u << bit_id);
+    path_used_bits[bit_id] = true;
 
     auto [left_budget, right_budget] = SplitBudget(budget, rng);
 
-    const size_t max_child_nodes = (1ull << (free_bits - 1)) - 1;
+    const size_t max_child_nodes = MaxInternalNodes(free_bits - 1);
     left_budget = std::min(left_budget, max_child_nodes);
     right_budget = std::min(right_budget, max_child_nodes);
 
@@ -93,16 +92,17 @@ size_t DecisionTree::BuildSubtree(
 
     const size_t child0 = BuildSubtree(
         left_budget,
-        allowed_bits,
-        child_used_bits,
+        path_used_bits,
+        path_used_count + 1,
         child0_required_value,
         rng);
     const size_t child1 = BuildSubtree(
         right_budget,
-        allowed_bits,
-        child_used_bits,
+        path_used_bits,
+        path_used_count + 1,
         child1_required_value,
         rng);
+    path_used_bits[bit_id] = false;
     nodes[node_id] = Div{bit_id, child0, child1};
     return node_id;
 }

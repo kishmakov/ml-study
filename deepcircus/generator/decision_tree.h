@@ -8,9 +8,6 @@
 #include <variant>
 #include <vector>
 
-inline constexpr uint16_t kInputBitness = 32;
-inline constexpr uint16_t kExactTableBitness = 4;
-
 struct Div {
     size_t bitId;
     size_t child0;
@@ -32,8 +29,8 @@ struct DecisionTree {
 
     size_t BuildSubtree(
         size_t budget,
-        uint32_t allowed_bits,
-        uint32_t path_used_bits,
+        std::vector<bool>& path_used_bits,
+        size_t path_used_count,
         bool required_value,
         std::mt19937& rng);
 

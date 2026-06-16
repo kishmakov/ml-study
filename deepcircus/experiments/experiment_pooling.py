@@ -24,16 +24,9 @@ GENERATION_BITNESSES = (
     4,
     15,
 )
-BITNESS_CACHE_KEY = hashlib.sha1(
-    "|".join(str(bitness) for bitness in GENERATION_BITNESSES).encode("ascii")
-).hexdigest()[:12]
-CACHE_DIR = Path(__file__).resolve().parents[1] / "tmp" / f"bitness_{BITNESS_CACHE_KEY}"
-CACHE_FILES = {
-    "x_train": CACHE_DIR / "x_train.npy",
-    "y_train": CACHE_DIR / "y_train.npy",
-    "x_test": CACHE_DIR / "x_test.npy",
-    "y_test": CACHE_DIR / "y_test.npy",
-}
+
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+
 
 _WORKER_GENERATOR = None
 _WORKER_INPUT_BITNESS = 0
@@ -59,11 +52,6 @@ def append_bits(points, input_bits, generator, bitness: int, case_id: int):
 
 def sample(bitness: int, case_id: int, generator, input_bitness: int):
     rng = random.Random((bitness << 32) + case_id)
-
-    # num_vertices = generator.case_nodes(bitness, case_id)
-    # active_bits = generator.case_active_bits(bitness, case_id)
-
-    # print(f"bitness={bitness} case={case_id} vertices={num_vertices} active={active_bits}")
 
     points = []
     for _ in range(REPS):
@@ -95,7 +83,7 @@ def sample_worker(task):
 
 
 def build_split(generator, split_specs, split_name: str):
-    input_bitness = generator.input_bitness()
+    input_bitness = max(GENERATION_BITNESSES)
     feature_size = REPS * (input_bitness + 1) * (input_bitness + 1)
     total_samples = sum(len(case_ids) for _, _, case_ids in split_specs)
     x = np.empty((total_samples, feature_size), dtype=np.float32)
@@ -133,10 +121,6 @@ def build_split(generator, split_specs, split_name: str):
 
 
 def build_dataset(generator):
-    input_bitness = generator.input_bitness()
-    for bitness in GENERATION_BITNESSES:
-        assert 0 <= bitness <= input_bitness
-
     train_specs = []
     test_specs = []
 
@@ -168,13 +152,12 @@ def train(
     model: MLPDetector,
     x_train: np.ndarray,
     y_train: np.ndarray,
-    device: str,
     *,
     epochs: int = 50,
     batch_size: int = 256,
     lr: float = 1e-3,
 ) -> MLPDetector:
-    model.to(device)
+    model.to(DEVICE)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     criterion = nn.BCEWithLogitsLoss()
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -192,7 +175,7 @@ def train(
         epoch_start = time.perf_counter()
         epoch_loss = 0.0
         for xb, yb in loader:
-            xb, yb = xb.to(device), yb.to(device)
+            xb, yb = xb.to(DEVICE), yb.to(DEVICE)
             optimizer.zero_grad()
             loss = criterion(model(xb), yb)
             loss.backward()
@@ -208,20 +191,20 @@ def train(
                 f"Epoch {epoch:>3}/{epochs}  "
                 f"loss={epoch_loss:.4f}  "
                 f"elapsed={epoch_elapsed:.2f}s  "
-                f"device={device}"
+                f"device={DEVICE}"
             )
 
     return model
 
 
-def predict(model: MLPDetector, x_test: np.ndarray, *, device: str = "cpu") -> np.ndarray:
+def predict(model: MLPDetector, x_test: np.ndarray) -> np.ndarray:
     model.eval()
     x = torch.tensor(x_test, dtype=torch.float32)
     predictions = []
 
     with torch.no_grad():
         for (xb,) in DataLoader(TensorDataset(x), batch_size=1024):
-            logits = model(xb.to(device))
+            logits = model(xb.to(DEVICE))
             batch_predictions = (torch.sigmoid(logits) >= 0.5).to(torch.int64)
             predictions.append(batch_predictions.cpu().numpy().ravel())
 
@@ -229,11 +212,10 @@ def predict(model: MLPDetector, x_test: np.ndarray, *, device: str = "cpu") -> n
 
 
 def train_detector(x_train, y_train, x_test, y_test):
-    device = "cuda" if torch.cuda.is_available() else "cpu"
     torch.manual_seed(RANDOM_SEED)
     model = MLPDetector(input_dim=x_train.shape[1])
-    model = train(model, x_train, y_train, device)
-    predictions = predict(model, x_test, device=device)
+    model = train(model, x_train, y_train)
+    predictions = predict(model, x_test)
 
     baseline = DummyClassifier(strategy="most_frequent")
     baseline.fit(x_train, y_train)

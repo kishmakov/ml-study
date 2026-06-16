@@ -10,7 +10,6 @@
 extern "C" {
 #endif
 
-size_t generator_get_input_bitness(void);
 size_t generator_get_cases_number(uint16_t bitness);
 
 // Computes number of nodes for given case

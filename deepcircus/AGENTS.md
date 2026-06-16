@@ -11,6 +11,7 @@ This is a research project to study ML approach to handle decision trees.
 - Do not generalize code for running
 - The generator API is bitness-based: use `uint16_t bitness`, not series ids or bit masks
 - `generator_case_value` receives exactly `bitness` input characters
+- Bitness is always a parameter
 - For bitness `0..4`, generate exact truth-table trees and cache them under `tmp/bN`
 - For larger bitness, use the random tree generator over bits `0..bitness-1`
 
@@ -20,8 +21,10 @@ This is a research project to study ML approach to handle decision trees.
 - `generator/decision_tree.{h,cpp}` owns `DecisionTree`, `Div`, `Node`, and tree evaluation/building
 - `generator/small_bitness.{h,cpp}` owns exact small-bitness solving and cache read/write
 - `generator/generator.{h,cpp}` owns the public C API and main generation dispatch
-- `scripts/run.py` owns generator loading, ctypes signatures, and the Python generator wrapper
-- `experiments/*.py` should contain experiment logic only; do not put ctypes or shared-library details there
+- `experiments/generator.py` owns generator loading, ctypes signatures, and the Python generator wrapper
+- `experiments/experiment_*.py` should contain experiment logic only; do not put ctypes or shared-library details there
+- `scripts/*.py` should stay thin entrypoints over experiment/generator helpers
+- `scripts/inspect.py` inspects small-bitness trees via `experiments.generator`
 
 
 # Building
