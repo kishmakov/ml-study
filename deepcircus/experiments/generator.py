@@ -1,28 +1,20 @@
-import ctypes
-import multiprocessing as mp
-import random
-from pathlib import Path
+from __future__ import annotations
 
+import ctypes
 import numpy as np
+import random
+from collections.abc import Callable
+from pathlib import Path
 from tqdm import tqdm
 
 
 DEEPCIRCUS_DIR = Path(__file__).resolve().parents[1]
 LIBRARY = DEEPCIRCUS_DIR / "build" / "libgenerator.so"
 
-_WORKER_GENERATOR = None
-
 
 class Generator:
     def __init__(self, library_path: Path):
         self.library_path = str(library_path)
-        self._library = None
-
-    def __getstate__(self):
-        return {"library_path": self.library_path}
-
-    def __setstate__(self, state):
-        self.library_path = state["library_path"]
         self._library = None
 
     @property
@@ -78,13 +70,9 @@ def _append_bit(point: list[float], bit: bool):
     point.append(1.0 if bit else -1.0)
 
 
-def _append_bits(points, input_bits: str, generator: Generator, bitness: int, case_id: int):
+def _append_bits(points, input_bits: str, value_fn: Callable[[str], bool]):
     point = []
-    output_bit = generator.case_value(
-        bitness,
-        case_id,
-        input_bits,
-    )
+    output_bit = value_fn(input_bits)
     for bit in input_bits:
         _append_bit(point, bit == "1")
 
@@ -92,80 +80,106 @@ def _append_bits(points, input_bits: str, generator: Generator, bitness: int, ca
     points.append(point)
 
 
-def _sample_case(bitness: int, case_id: int, generator: Generator, reps: int):
-    rng = random.Random((bitness << 32) + case_id)
-
-    points = []
-    for _ in range(reps):
+def _sample_function(
+    bitness: int,
+    value_fn: Callable[[str], bool],
+    reps: int,
+    seed: int,
+) -> np.ndarray:
+    rng = random.Random(seed)
+    point_dim = (bitness + 1) * (bitness + 1)
+    samples = np.empty((reps, point_dim), dtype=np.float32)
+    for rep_id in range(reps):
+        points = []
         input_bits = "".join(rng.choice("01") for _ in range(bitness))
-        _append_bits(points, input_bits, generator, bitness, case_id)
+        _append_bits(points, input_bits, value_fn)
 
         flipped_bits = list(input_bits)
         for bit_id in range(bitness):
             flipped_bits[bit_id] = "0" if flipped_bits[bit_id] == "1" else "1"
-            _append_bits(points, "".join(flipped_bits), generator, bitness, case_id)
+            _append_bits(points, "".join(flipped_bits), value_fn)
             flipped_bits[bit_id] = input_bits[bit_id]
 
-    return np.asarray(points, dtype=np.float32).ravel()
+        samples[rep_id] = np.asarray(points, dtype=np.float32).ravel()
+
+    return samples
 
 
-def _init_worker(generator):
-    global _WORKER_GENERATOR
-    _WORKER_GENERATOR = generator
-
-
-def _sample_worker(task):
-    row_id, bitness, case_id, reps = task
-    return (
-        row_id,
-        _sample_case(bitness, case_id, _WORKER_GENERATOR, reps),
+def _sample_case(bitness: int, case_id: int, generator: Generator, reps: int):
+    return _sample_function(
+        bitness,
+        lambda input_bits: generator.case_value(bitness, case_id, input_bits),
+        reps,
+        seed=(bitness << 32) + case_id,
     )
+
+
+def sample_restriction(
+    generator: Generator,
+    bitness: int,
+    case_id: int,
+    fixed_bit_id: int,
+    fixed_bit_value: int,
+    reps: int,
+) -> np.ndarray:
+    assert 0 <= fixed_bit_id < bitness
+    assert fixed_bit_value in (0, 1)
+
+    def value_fn(input_bits: str) -> bool:
+        full_input_bits = (
+            input_bits[:fixed_bit_id]
+            + str(fixed_bit_value)
+            + input_bits[fixed_bit_id:]
+        )
+        return generator.case_value(bitness, case_id, full_input_bits)
+
+    seed = (
+        (bitness << 48)
+        + (case_id << 8)
+        + (fixed_bit_id << 1)
+        + fixed_bit_value
+    )
+    return _sample_function(bitness - 1, value_fn, reps, seed)
+
+
+def generate_ids(
+    generator: Generator,
+    bitness: int,
+    number: int,
+    seed: int,
+) -> list[int]:
+    rng = random.Random(seed)
+    return rng.sample(range(generator.cases_number(bitness)), number)
+
+
+def generate_sample_tensors(
+    generator: Generator,
+    bitness: int,
+    case_ids: list[int],
+    reps: int,
+) -> np.ndarray:
+    case_ids = list(case_ids)
+
+    point_dim = (bitness + 1) * (bitness + 1)
+    x = np.empty((len(case_ids), reps, point_dim), dtype=np.float32)
+
+    print(f"Generating {len(case_ids)} sample tensors for bitness {bitness}")
+    for row_id, case_id in enumerate(tqdm(case_ids, desc=f"b={bitness}")):
+        x[row_id] = _sample_case(bitness, case_id, generator, reps)
+
+    return x
 
 
 def generate_samples(
     generator: Generator,
     bitness: int,
-    *,
-    num: int | None = None,
-    case_ids: list[int] | None = None,
-    seed: int | None = None,
-    reps: int = 100,
-    processes: int = 16,
-    pool_chunksize: int = 1,
-    split_name: str = "samples",
-) -> np.ndarray:
-    if case_ids is None:
-        assert num is not None, "num must be provided when case_ids are omitted"
-        assert seed is not None, "seed must be provided when case_ids are omitted"
-        case_ids = random.Random(seed).sample(range(generator.cases_number(bitness)), num)
-    else:
-        case_ids = list(case_ids)
-        if num is not None:
-            assert num == len(case_ids), "num must match the number of case_ids"
-
-    feature_size = reps * (bitness + 1) * (bitness + 1)
-    x = np.empty((len(case_ids), feature_size), dtype=np.float32)
-
-    def tasks():
-        for row_id, case_id in enumerate(case_ids):
-            yield row_id, bitness, case_id, reps
-
-    context = mp.get_context("fork")
-    with context.Pool(
-        processes=processes,
-        initializer=_init_worker,
-        initargs=(generator,),
-    ) as pool:
-        print(
-            f"Generating {len(case_ids)} {split_name} feature vectors "
-            f"for bitness {bitness} with {processes} processes"
-        )
-        results = pool.imap_unordered(_sample_worker, tasks(), chunksize=pool_chunksize)
-        for row_id, features in tqdm(
-            results,
-            total=len(case_ids),
-            desc=f"{split_name} b={bitness}",
-        ):
-            x[row_id] = features
-
-    return x
+    case_ids: list[int],
+    reps: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    case_ids = list(case_ids)
+    x = generate_sample_tensors(generator, bitness, case_ids, reps)
+    y = np.asarray(
+        [generator.case_nodes(bitness, case_id) for case_id in case_ids],
+        dtype=np.int64,
+    )
+    return x, y

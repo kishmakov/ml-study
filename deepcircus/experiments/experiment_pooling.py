@@ -1,109 +1,114 @@
-import random
 import time
 
 import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
-from sklearn.dummy import DummyClassifier
-from sklearn.metrics import accuracy_score, classification_report
+from tqdm import tqdm
 
-from experiments.generator import generate_samples
-from experiments.model import MLPDetector
-
-TRAIN_SAMPLES_PER_BITNESS = 1 << 10
-TEST_SAMPLES_PER_BITNESS = 1 << 10
-RANDOM_SEED = 239
-REPS = 100
-
-GENERATION_BITNESSES = (4, 15)
+from experiments.generator import (
+    generate_ids,
+    generate_sample_tensors,
+    generate_samples,
+    sample_restriction,
+)
+from experiments.model import DeepSetPredictor
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+TRAIN_SAMPLES = 1 << 12
+
+MIN_BITNESS = 4
+MAX_BITNESS = 5
+
+TRAIN_ITERATIONS = 10
+
+REPS = 100
+MODELS = {}
+THRESHOLD = 0.05
+
+PREDICT_BATCH_SIZE = 1024
+TARGET_CASE_BATCH_SIZE = 128
 
 
-def pad_samples(x: np.ndarray, bitness: int, target_bitness: int) -> np.ndarray:
-    if bitness == target_bitness:
-        return x
+def predict_values(model: nn.Module, x: np.ndarray) -> np.ndarray:
+    model.to(DEVICE)
+    model.eval()
 
-    source_side = bitness + 1
-    target_side = target_bitness + 1
-    reshaped = x.reshape(len(x), REPS, source_side, source_side)
-    padded = np.zeros((len(x), REPS, target_side, target_side), dtype=np.float32)
-    padded[:, :, :source_side, :source_side] = reshaped
-    return padded.reshape(len(x), REPS * target_side * target_side)
-
-
-def build_dataset(generator):
-    target_bitness = max(GENERATION_BITNESSES)
-    train_specs = []
-    test_specs = []
-
-    for bitness_id, bitness in enumerate(GENERATION_BITNESSES):
-        cases_number = generator.cases_number(bitness)
-        needed_cases = TRAIN_SAMPLES_PER_BITNESS + TEST_SAMPLES_PER_BITNESS
-        assert needed_cases < cases_number, "Asking too much"
-
-        rng = random.Random(RANDOM_SEED + bitness)
-        case_ids = rng.sample(range(cases_number), needed_cases)
-        train_specs.append((bitness_id, bitness, case_ids[:TRAIN_SAMPLES_PER_BITNESS]))
-        test_specs.append((bitness_id, bitness, case_ids[TRAIN_SAMPLES_PER_BITNESS:]))
-
-    x_train_parts = []
-    y_train_parts = []
-    for bitness_id, bitness, case_ids in train_specs:
-        x_train_parts.append(
-            pad_samples(
-                generate_samples(
-                    generator,
-                    bitness,
-                    case_ids=case_ids,
-                    reps=REPS,
-                    split_name="train",
-                ),
-                bitness,
-                target_bitness,
+    predictions = []
+    with torch.no_grad():
+        for start in range(0, len(x), PREDICT_BATCH_SIZE):
+            xb = torch.as_tensor(
+                x[start : start + PREDICT_BATCH_SIZE],
+                dtype=torch.float32,
+                device=DEVICE,
             )
-        )
-        y_train_parts.append(np.full(len(case_ids), bitness_id, dtype=np.int64))
+            predictions.append(model(xb).cpu().numpy().ravel())
 
-    x_test_parts = []
-    y_test_parts = []
-    for bitness_id, bitness, case_ids in test_specs:
-        x_test_parts.append(
-            pad_samples(
-                generate_samples(
-                    generator,
-                    bitness,
-                    case_ids=case_ids,
-                    reps=REPS,
-                    split_name="test",
-                ),
-                bitness,
-                target_bitness,
-            )
-        )
-        y_test_parts.append(np.full(len(case_ids), bitness_id, dtype=np.int64))
 
-    x_train = np.concatenate(x_train_parts, axis=0)
-    y_train = np.concatenate(y_train_parts, axis=0)
-    x_test = np.concatenate(x_test_parts, axis=0)
-    y_test = np.concatenate(y_test_parts, axis=0)
+    return np.concatenate(predictions).astype(np.float32)
 
-    return x_train, y_train, x_test, y_test
+
+def approximate_targets(generator, bitness: int, case_ids: list[int]) -> np.ndarray:
+    previous_model = MODELS.get(bitness - 1)
+    if previous_model is None:
+        raise ValueError(f"Missing model for bitness {bitness - 1}")
+
+    target_parts = []
+    ranges = range(0, len(case_ids), TARGET_CASE_BATCH_SIZE)
+    total_batches = (len(case_ids) + TARGET_CASE_BATCH_SIZE - 1) // TARGET_CASE_BATCH_SIZE
+    for start in tqdm(ranges, total=total_batches, desc=f"targets b={bitness}"):
+        batch_ids = case_ids[start : start + TARGET_CASE_BATCH_SIZE]
+        restricted_samples = []
+        for case_id in batch_ids:
+            for fixed_bit_id in range(bitness):
+                for fixed_bit_value in (0, 1):
+                    restricted_samples.append(
+                        sample_restriction(
+                            generator,
+                            bitness,
+                            case_id,
+                            fixed_bit_id,
+                            fixed_bit_value,
+                            REPS,
+                        )
+                    )
+
+        x_restricted = np.stack(restricted_samples, axis=0)
+        predictions = predict_values(previous_model, x_restricted)
+        predictions = predictions.reshape(len(batch_ids), bitness, 2)
+        branch_sizes = np.maximum(np.expm1(predictions), 0.0)
+        split_sizes = 1.0 + branch_sizes.sum(axis=2)
+        target_parts.append(np.log1p(split_sizes.min(axis=1)))
+
+    return np.concatenate(target_parts).astype(np.float32)
+
+
+def build_dataset(generator, bitness: int, seed: int):
+    ids = generate_ids(generator, bitness, TRAIN_SAMPLES, seed)
+    if bitness <= 4:
+        x_train, y_train = generate_samples(generator, bitness, ids, REPS)
+        y_train = np.log1p(y_train)
+        return x_train, y_train
+
+    x_train = generate_sample_tensors(generator, bitness, ids, REPS)
+    y_train = approximate_targets(generator, bitness, ids)
+    return x_train, y_train
 
 
 def train(
-    model: MLPDetector,
+    bitness: int,
     x_train: np.ndarray,
     y_train: np.ndarray,
     *,
     epochs: int = 50,
     batch_size: int = 256,
     lr: float = 1e-3,
-) -> MLPDetector:
+):
+    model = MODELS.get(bitness)
     model.to(DEVICE)
+
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    criterion = nn.BCEWithLogitsLoss()
+    criterion = nn.MSELoss()
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
         patience=5,
@@ -130,51 +135,34 @@ def train(
         scheduler.step(epoch_loss)
         epoch_elapsed = time.perf_counter() - epoch_start
 
-        if epoch % 10 == 0:
-            print(
-                f"Epoch {epoch:>3}/{epochs}  "
-                f"loss={epoch_loss:.4f}  "
-                f"elapsed={epoch_elapsed:.2f}s  "
-                f"device={DEVICE}"
-            )
+        print(
+            f"Epoch {epoch:>3}/{epochs}  "
+            f"loss={epoch_loss:.4f}  "
+            f"elapsed={epoch_elapsed:.2f}s  "
+            f"device={DEVICE}"
+        )
 
-    return model
-
-
-def predict(model: MLPDetector, x_test: np.ndarray) -> np.ndarray:
-    model.eval()
-    x = torch.tensor(x_test, dtype=torch.float32)
-    predictions = []
-
-    with torch.no_grad():
-        for (xb,) in DataLoader(TensorDataset(x), batch_size=1024):
-            logits = model(xb.to(DEVICE))
-            batch_predictions = (torch.sigmoid(logits) >= 0.5).to(torch.int64)
-            predictions.append(batch_predictions.cpu().numpy().ravel())
-
-    return np.concatenate(predictions)
-
-
-def train_detector(x_train, y_train, x_test, y_test):
-    torch.manual_seed(RANDOM_SEED)
-    model = MLPDetector(input_dim=x_train.shape[1])
-    model = train(model, x_train, y_train)
-    predictions = predict(model, x_test)
-
-    baseline = DummyClassifier(strategy="most_frequent")
-    baseline.fit(x_train, y_train)
-    baseline_predictions = baseline.predict(x_test)
-
-    print(f"detector_test_accuracy: {accuracy_score(y_test, predictions):.4f}")
-    print(f"baseline_test_accuracy: {accuracy_score(y_test, baseline_predictions):.4f}")
-    print(classification_report(y_test, predictions))
-
+        if epoch_loss < THRESHOLD:
+            break
 
 def run_experiment(generator):
-    x_train, y_train, x_test, y_test = build_dataset(generator)
-    print(f"x_train: {x_train.shape}, y_train: {y_train.shape}")
-    print(f"x_test: {x_test.shape}, y_test: {y_test.shape}")
-    print(f"train labels: {np.bincount(y_train)}")
-    print(f"test labels: {np.bincount(y_test)}")
+    SEED_OFFSET = 239
 
-    train_detector(x_train, y_train, x_test, y_test)
+    for bitness in range(MIN_BITNESS, MAX_BITNESS + 1):
+        point_dim = (bitness + 1) * (bitness + 1)
+        MODELS[bitness] = DeepSetPredictor(point_dim)
+
+    for iteration in range(TRAIN_ITERATIONS):
+        for bitness in range(MIN_BITNESS, MAX_BITNESS + 1):
+            seed = iteration + SEED_OFFSET
+            x_train, y_train = build_dataset(generator, bitness, seed)
+            train(bitness, x_train, y_train)
+
+
+    # x_train, y_train, x_test, y_test = build_dataset(generator)
+    # print(f"x_train: {x_train.shape}, y_train: {y_train.shape}")
+    # print(f"x_test: {x_test.shape}, y_test: {y_test.shape}")
+    # print(f"train labels: {np.bincount(y_train)}")
+    # print(f"test labels: {np.bincount(y_test)}")
+    #
+    # train_detector(x_train, y_train, x_test, y_test)
