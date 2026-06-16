@@ -14,10 +14,10 @@ from sklearn.metrics import accuracy_score, classification_report
 
 from experiments.model import MLPDetector
 
-TRAIN_SAMPLES_PER_SERIES = 1 << 12
-TEST_SAMPLES_PER_SERIES = 1 << 12
+TRAIN_SAMPLES_PER_SERIES = 1 << 11
+TEST_SAMPLES_PER_SERIES = 1 << 11
 RANDOM_SEED = 239
-REPS = 20
+REPS = 100
 PROCESSES = 16
 POOL_CHUNKSIZE = 1
 CACHE_DIR = Path(__file__).resolve().parents[1] / "tmp"
