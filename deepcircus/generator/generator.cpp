@@ -44,7 +44,6 @@ DecisionTree RandomTree(uint16_t bitness, std::mt19937& rng, size_t target_size)
 inline std::mt19937 PrepRNG(uint16_t bitness, size_t case_id) {
     std::seed_seq seed{
         static_cast<uint32_t>(case_id),
-        static_cast<uint32_t>(case_id >> 32),
         static_cast<uint32_t>(bitness),
     };
     return std::mt19937(seed);
@@ -57,29 +56,42 @@ inline size_t PrepSize(uint16_t bitness, std::mt19937& rng) {
     return std::uniform_int_distribution<size_t>(0, max_size)(rng);
 }
 
-inline std::mt19937 PrepRestrictionRNG(
-    uint16_t bitness,
-    size_t case_id,
-    size_t fixed_bit_id,
-    size_t fixed_bit_value,
-    size_t rep)
-{
-    std::seed_seq seed{
-        static_cast<uint32_t>(case_id),
-        static_cast<uint32_t>(case_id >> 32),
-        static_cast<uint32_t>(bitness),
-        static_cast<uint32_t>(fixed_bit_id),
-        static_cast<uint32_t>(fixed_bit_value),
-        static_cast<uint32_t>(rep),
-        static_cast<uint32_t>(rep >> 32),
-    };
-    return std::mt19937(seed);
+// Computes position of bit in masked sequence
+inline size_t FullBitId(size_t bit_id, size_t fixed_id) {
+    return bit_id < fixed_id ? bit_id : bit_id + 1;
 }
 
-inline size_t FullBitId(size_t restricted_bit_id, size_t fixed_bit_id) {
-    return restricted_bit_id < fixed_bit_id
-        ? restricted_bit_id
-        : restricted_bit_id + 1;
+// Writes one sample into `value` at `sample_offset`: the base point built from
+// `input` followed by one point per free bit with that bit flipped. Each
+// point stores the free-bit coordinates and then the tree's value on the full
+// input. `fixed_bit_id == bitness` means no bit is fixed (every bit is free);
+// otherwise that bit is held constant and excluded from the coordinates.
+void WriteFlipSample(
+    std::string& value,
+    size_t sample_offset,
+    std::string& input,
+    const DecisionTree& tree,
+    size_t fixed_bit_id)
+{
+    const size_t bitness = input.size();
+    const size_t free_bits = fixed_bit_id < bitness ? bitness - 1 : bitness;
+    const size_t point_size = free_bits + 1;
+
+    const auto write_point = [&](size_t point_id) {
+        const size_t offset = sample_offset + point_id * point_size;
+        for (size_t coord = 0; coord < free_bits; ++coord) {
+            value[offset + coord] = input[FullBitId(coord, fixed_bit_id)];
+        }
+        value[offset + free_bits] = tree.Evaluate({input.data(), bitness}) ? '1' : '0';
+    };
+
+    write_point(0);
+    for (size_t coord = 0; coord < free_bits; ++coord) {
+        char& bit = input[FullBitId(coord, fixed_bit_id)];
+        bit = bit == '1' ? '0' : '1';
+        write_point(coord + 1);
+        bit = bit == '1' ? '0' : '1';
+    }
 }
 
 }  // namespace
@@ -149,21 +161,7 @@ const char* generator_case_value(uint16_t bitness, size_t case_id, const char* i
     point_input.assign(input, bitness);
 
     const DecisionTree& tree = GetRandomTree(bitness, case_id);
-    const auto write_point = [&](size_t point_id) {
-        const size_t offset = point_id * point_size;
-        for (size_t bit_id = 0; bit_id < bitness; ++bit_id) {
-            value[offset + bit_id] = point_input[bit_id];
-        }
-        bool fv = tree.Evaluate(std::string_view(point_input.data(), bitness));
-        value[offset + bitness] = fv ? '1' : '0';
-    };
-
-    write_point(0);
-    for (size_t bit_id = 0; bit_id < bitness; ++bit_id) {
-        point_input[bit_id] = point_input[bit_id] == '1' ? '0' : '1';
-        write_point(bit_id + 1);
-        point_input[bit_id] = input[bit_id];
-    }
+    WriteFlipSample(value, /*sample_offset=*/0, point_input, tree, /*fixed_bit_id=*/bitness);
     return value.c_str();
 }
 
@@ -173,57 +171,26 @@ const char* generator_case_restrictions(uint16_t bitness, size_t case_id, size_t
 
     thread_local std::string value;
     thread_local std::string full_input;
-    thread_local std::string restricted_input;
+
+    std::mt19937 rng = PrepRNG(bitness, case_id);
 
     const size_t restricted_bitness = bitness - 1;
-    const size_t restricted_point_size = bitness;
-    const size_t restricted_sample_size = restricted_point_size * restricted_point_size;
-    value.assign(bitness * 2 * restricted_sample_size, '0');
+    const size_t sample_size = bitness * bitness; // restricted_point_size^2
+    value.assign(bitness * 2 * sample_size, '0');
     full_input.assign(bitness, '0');
-    restricted_input.assign(restricted_bitness, '0');
 
     const DecisionTree& tree = GetRandomTree(bitness, case_id);
-    const auto write_restricted_point = [&](
-        size_t sample_offset,
-        size_t point_id,
-        size_t fixed_bit_id)
-    {
-        const size_t point_offset = sample_offset + point_id * restricted_point_size;
-        for (size_t restricted_bit_id = 0; restricted_bit_id < restricted_bitness; ++restricted_bit_id) {
-            const size_t full_bit_id = FullBitId(restricted_bit_id, fixed_bit_id);
-            value[point_offset + restricted_bit_id] = full_input[full_bit_id];
-        }
-        value[point_offset + restricted_bitness] = tree.Evaluate(
-            std::string_view(full_input.data(), bitness)) ? '1' : '0';
-    };
 
     for (size_t fixed_bit_id = 0; fixed_bit_id < bitness; ++fixed_bit_id) {
         for (size_t fixed_bit_value = 0; fixed_bit_value <= 1; ++fixed_bit_value) {
-            std::mt19937 rng = PrepRestrictionRNG(
-                bitness,
-                case_id,
-                fixed_bit_id,
-                fixed_bit_value,
-                rep);
+            // Pin the fixed bit and sample random values for the free bits.
+            full_input[fixed_bit_id] = static_cast<char>('0' + fixed_bit_value);
+            for (size_t coord = 0; coord < restricted_bitness; ++coord) {
+                full_input[FullBitId(coord, fixed_bit_id)] = RandomBool(rng) ? '1' : '0';
+            }
 
             const size_t restriction_id = fixed_bit_id * 2 + fixed_bit_value;
-            const size_t sample_offset = restriction_id * restricted_sample_size;
-            for (size_t restricted_bit_id = 0; restricted_bit_id < restricted_bitness; ++restricted_bit_id) {
-                restricted_input[restricted_bit_id] = RandomBool(rng) ? '1' : '0';
-            }
-            for (size_t full_bit_id = 0; full_bit_id < bitness; ++full_bit_id) {
-                full_input[full_bit_id] = full_bit_id == fixed_bit_id
-                    ? static_cast<char>('0' + fixed_bit_value)
-                    : restricted_input[full_bit_id - (full_bit_id > fixed_bit_id ? 1 : 0)];
-            }
-
-            write_restricted_point(sample_offset, 0, fixed_bit_id);
-            for (size_t restricted_bit_id = 0; restricted_bit_id < restricted_bitness; ++restricted_bit_id) {
-                const size_t full_bit_id = FullBitId(restricted_bit_id, fixed_bit_id);
-                full_input[full_bit_id] = full_input[full_bit_id] == '1' ? '0' : '1';
-                write_restricted_point(sample_offset, restricted_bit_id + 1, fixed_bit_id);
-                full_input[full_bit_id] = restricted_input[restricted_bit_id];
-            }
+            WriteFlipSample(value, restriction_id * sample_size, full_input, tree, fixed_bit_id);
         }
     }
 

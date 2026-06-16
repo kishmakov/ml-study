@@ -133,12 +133,13 @@ def train(
         scheduler.step(epoch_loss)
         epoch_elapsed = time.perf_counter() - epoch_start
 
-        print(
-            f"Epoch {epoch:>3}/{epochs}  "
-            f"loss={epoch_loss:.4f}  "
-            f"elapsed={epoch_elapsed:.2f}s  "
-            f"device={DEVICE}"
-        )
+        if epoch_loss < THRESHOLD or epoch % 10 == 0:
+            print(
+                f"Epoch {epoch:>3}/{epochs}  "
+                f"loss={epoch_loss:.4f}  "
+                f"elapsed={epoch_elapsed:.2f}s  "
+                f"device={DEVICE}"
+            )
 
         if epoch_loss < THRESHOLD:
             break
@@ -156,12 +157,3 @@ def run_experiment(generator):
             seed = iteration + SEED_OFFSET
             x_train, y_train = build_dataset(generator, bitness, seed)
             train(bitness, x_train, y_train)
-
-
-    # x_train, y_train, x_test, y_test = build_dataset(generator)
-    # print(f"x_train: {x_train.shape}, y_train: {y_train.shape}")
-    # print(f"x_test: {x_test.shape}, y_test: {y_test.shape}")
-    # print(f"train labels: {np.bincount(y_train)}")
-    # print(f"test labels: {np.bincount(y_test)}")
-    #
-    # train_detector(x_train, y_train, x_test, y_test)

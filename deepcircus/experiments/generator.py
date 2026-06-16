@@ -149,28 +149,6 @@ def _sample_case(bitness: int, case_id: int, generator: Generator, reps: int):
     )
 
 
-def sample_restriction(
-    generator: Generator,
-    bitness: int,
-    case_id: int,
-    fixed_bit_id: int,
-    fixed_bit_value: int,
-    reps: int,
-) -> np.ndarray:
-    assert 0 <= fixed_bit_id < bitness
-    assert fixed_bit_value in (0, 1)
-    restriction_id = fixed_bit_id * 2 + fixed_bit_value
-    point_dim = bitness * bitness
-    samples = np.empty((reps, point_dim), dtype=np.float32)
-    for rep in range(reps):
-        samples[rep] = generator.case_restrictions(
-            bitness,
-            case_id,
-            rep,
-        )[restriction_id]
-    return samples
-
-
 def sample_restrictions(
     generator: Generator,
     bitness: int,
