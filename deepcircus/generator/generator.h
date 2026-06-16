@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdint.h>
 #include <stddef.h>
 #ifndef __cplusplus
 #include <stdbool.h>
@@ -10,17 +11,16 @@ extern "C" {
 #endif
 
 size_t generator_get_input_bitness(void);
-size_t generator_get_series_number(void);
-size_t generator_get_cases_number(size_t series_id);
+size_t generator_get_cases_number(uint16_t bitness);
 
 // Computes number of nodes for given case
-size_t generator_case_nodes(size_t series_id, size_t case_id);
+size_t generator_case_nodes(uint16_t bitness, size_t case_id);
 
 // Returns masked representation of active bits
-const char* generator_case_active_bits(size_t series_id, size_t case_id);
+const char* generator_case_active_bits(uint16_t bitness, size_t case_id);
 
 // Computes function value for given case
-bool generator_case_value(size_t series_id, size_t case_id, const char* input);
+bool generator_case_value(uint16_t bitness, size_t case_id, const char* input);
 
 #ifdef __cplusplus
 }
