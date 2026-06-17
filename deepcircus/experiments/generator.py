@@ -15,6 +15,14 @@ LIBRARY = DEEPCIRCUS_DIR / "build" / "libgenerator.so"
 _WORKER_GENERATOR = None
 
 
+def sample_point_dim(bitness: int) -> int:
+    return 2 * bitness + 1
+
+
+def restriction_point_dim(bitness: int) -> int:
+    return sample_point_dim(bitness - 1)
+
+
 class Generator:
     def __init__(self, library_path: Path):
         self.library_path = str(library_path)
@@ -68,7 +76,7 @@ class Generator:
             case_id,
             input_bits.encode("ascii"),
         )
-        return _ascii_bits_to_signed(value, (bitness + 1) * (bitness + 1))
+        return _ascii_bits_to_signed(value, sample_point_dim(bitness))
 
     def case_restrictions(self, bitness: int, case_id: int, rep: int) -> np.ndarray:
         value = self.library.generator_case_restrictions(
@@ -76,7 +84,7 @@ class Generator:
             case_id,
             rep,
         )
-        point_dim = bitness * bitness
+        point_dim = restriction_point_dim(bitness)
         signed = _ascii_bits_to_signed(value, bitness * 2 * point_dim)
         return signed.reshape(bitness * 2, point_dim)
 
@@ -131,7 +139,7 @@ def _sample_function(
     seed: int,
 ) -> np.ndarray:
     rng = random.Random(seed)
-    point_dim = (bitness + 1) * (bitness + 1)
+    point_dim = sample_point_dim(bitness)
     samples = np.empty((reps, point_dim), dtype=np.float32)
     for rep_id in range(reps):
         input_bits = "".join(rng.choice("01") for _ in range(bitness))
@@ -155,7 +163,7 @@ def sample_restrictions(
     case_id: int,
     reps: int,
 ) -> np.ndarray:
-    point_dim = bitness * bitness
+    point_dim = restriction_point_dim(bitness)
     samples = np.empty((bitness * 2, reps, point_dim), dtype=np.float32)
     for rep in range(reps):
         value = generator.case_restrictions(
@@ -174,7 +182,7 @@ def generate_restriction_tensors(
     reps: int,
     processes: int,
 ) -> np.ndarray:
-    point_dim = bitness * bitness
+    point_dim = restriction_point_dim(bitness)
     restrictions_per_case = bitness * 2
     x = np.empty(
         (len(case_ids) * restrictions_per_case, reps, point_dim),
@@ -216,7 +224,7 @@ def generate_sample_tensors(
 ) -> np.ndarray:
     case_ids = list(case_ids)
 
-    point_dim = (bitness + 1) * (bitness + 1)
+    point_dim = sample_point_dim(bitness)
     x = np.empty((len(case_ids), reps, point_dim), dtype=np.float32)
 
     print(f"Generating {len(case_ids)} sample tensors for bitness {bitness}")

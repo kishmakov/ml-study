@@ -30,20 +30,20 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 MODEL_DIR = DEFAULT_MODEL_DIR
 META_PATH = DEFAULT_META_PATH
 
-TRAIN_SAMPLES = 1 << 12
+TRAIN_SAMPLES = 1 << 14
 VALIDATION_SAMPLES = 128
 
 MIN_BITNESS = 4
-MAX_BITNESS = 16
+MAX_BITNESS = 10
 
 TRAIN_ITERATIONS = 100
 TRAIN_EPOCHS = 500
 BATCH_SIZE = 256
 LR = 1e-3
 
-REPS = 100
+REPS = 128
 MODELS = {}
-THRESHOLD = 0.05
+THRESHOLD = 0.025
 
 PREDICT_BATCH_SIZE = 1024
 TARGET_CASE_BATCH_SIZE = 128
@@ -202,7 +202,7 @@ def run_experiment(generator):
 
     validation = {}
     for bitness in range(MIN_BITNESS, MAX_BITNESS + 1):
-        point_dim = (bitness + 1) * (bitness + 1)
+        point_dim = 2 * bitness + 1
         MODELS[bitness] = DeepSetPredictor(point_dim)
         checkpoint = load_model_checkpoint_if_exists(MODEL_DIR, bitness, DEVICE)
         if checkpoint is not None:

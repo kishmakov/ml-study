@@ -4,7 +4,7 @@ import torch.nn as nn
 # ── Model ─────────────────────────────────────────────────────────────────────
 
 class DeepSetPredictor(nn.Module):
-    def __init__(self, point_dim: int, phi_hidden: int = 256, phi_out: int = 256,
+    def __init__(self, point_dim: int, phi_hidden: int = 512, phi_out: int = 256,
                  rho_hidden: int = 512, dropout: float = 0.3):
         super().__init__()
 
@@ -27,12 +27,12 @@ class DeepSetPredictor(nn.Module):
             nn.ReLU(),
             nn.Dropout(dropout),
 
-            nn.Linear(rho_hidden, rho_hidden // 2),
-            nn.BatchNorm1d(rho_hidden // 2),
+            nn.Linear(rho_hidden, rho_hidden),
+            nn.BatchNorm1d(rho_hidden),
             nn.ReLU(),
             nn.Dropout(dropout),
 
-            nn.Linear(rho_hidden // 2, 1),
+            nn.Linear(rho_hidden, 1),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

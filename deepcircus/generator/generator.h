@@ -15,10 +15,13 @@ size_t generator_get_cases_number(uint16_t bitness);
 // Computes number of nodes for given case
 size_t generator_case_nodes(uint16_t bitness, size_t case_id);
 
-// Returns masked representation of active bits
+// Returns 0/1 masked representation of active bits
 const char* generator_case_active_bits(uint16_t bitness, size_t case_id);
 
-// Computes adjacent sample points for given case as ASCII 0/1 bytes
+// Computes value of the function at input and all variations of input with one
+// bit flipped.
+// Return 0/1 string of length 2 * bitness + 1: input [bitness bits] +
+// f(input) [1 bit] + f(input with flipped i-th bit) [1 x bitness bits]
 const char* generator_case_value(uint16_t bitness, size_t case_id, const char* input);
 
 // Computes all restriction sample points for one rep as ASCII 0/1 bytes

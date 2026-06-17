@@ -157,7 +157,7 @@ def append_validation_metric(
     meta_path: str,
 ) -> None:
     meta.setdefault("metrics", []).append(metric)
-    meta["progress"] = metric["progress"]
+    # meta["progress"] = metric["progress"]
     save_experiment_meta(meta, meta_path)
 
 
