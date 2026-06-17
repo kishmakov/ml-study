@@ -6,12 +6,11 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 
-from experiments.generator import (
+from experiments.sampler import (
     generate_ids,
     generate_restriction_tensors,
     generate_sample_tensors,
     generate_samples,
-    make_restriction_pool,
 )
 from experiments.model import DeepSetPredictor
 from experiments.state_io import (
@@ -30,7 +29,7 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 MODEL_DIR = DEFAULT_MODEL_DIR
 META_PATH = DEFAULT_META_PATH
 
-TRAIN_SAMPLES = 1 << 14
+TRAIN_SAMPLES = 1 << 12
 VALIDATION_SAMPLES = 128
 
 MIN_BITNESS = 4
@@ -77,30 +76,29 @@ def approximate_targets(generator, bitness: int, case_ids: list[int]) -> np.ndar
     ranges = range(0, len(case_ids), TARGET_CASE_BATCH_SIZE)
     total_batches = (len(case_ids) + TARGET_CASE_BATCH_SIZE - 1) // TARGET_CASE_BATCH_SIZE
 
-    with make_restriction_pool(generator, TARGET_PROCESSES) as pool:
-        print(
-            f"Generating reduced samples for {len(case_ids)} targets "
-            f"at bitness {bitness} with {TARGET_PROCESSES} processes"
+    print(
+        f"Generating reduced samples for {len(case_ids)} targets "
+        f"at bitness {bitness} with {TARGET_PROCESSES} processes"
+    )
+    for start in tqdm(ranges, total=total_batches, desc=f"targets b={bitness}"):
+        batch_ids = case_ids[start : start + TARGET_CASE_BATCH_SIZE]
+        x_restricted = generate_restriction_tensors(
+            generator,
+            bitness,
+            batch_ids,
+            REPS,
+            TARGET_PROCESSES,
         )
-        for start in tqdm(ranges, total=total_batches, desc=f"targets b={bitness}"):
-            batch_ids = case_ids[start : start + TARGET_CASE_BATCH_SIZE]
-            x_restricted = generate_restriction_tensors(
-                pool,
-                bitness,
-                batch_ids,
-                REPS,
-                TARGET_PROCESSES,
-            )
-            predictions = predict_values(previous_model, x_restricted)
-            predictions = predictions.reshape(len(batch_ids), bitness, 2)
-            predictions = np.clip(
-                predictions,
-                0.0,
-                np.log1p((1 << bitness) - 1),
-            )
-            branch_sizes = np.maximum(np.expm1(predictions), 0.0)
-            split_sizes = 1.0 + branch_sizes.sum(axis=2)
-            target_parts.append(np.log1p(split_sizes.min(axis=1)))
+        predictions = predict_values(previous_model, x_restricted)
+        predictions = predictions.reshape(len(batch_ids), bitness, 2)
+        predictions = np.clip(
+            predictions,
+            0.0,
+            np.log1p((1 << bitness) - 1),
+        )
+        branch_sizes = np.maximum(np.expm1(predictions), 0.0)
+        split_sizes = 1.0 + branch_sizes.sum(axis=2)
+        target_parts.append(np.log1p(split_sizes.min(axis=1)))
 
     return np.concatenate(target_parts).astype(np.float32)
 
@@ -108,11 +106,13 @@ def approximate_targets(generator, bitness: int, case_ids: list[int]) -> np.ndar
 def build_dataset(generator, bitness: int, seed: int):
     ids = generate_ids(generator, bitness, TRAIN_SAMPLES, seed)
     if bitness <= 4:
-        x_train, y_train = generate_samples(generator, bitness, ids, REPS)
+        x_train, y_train = generate_samples(
+            generator, bitness, ids, REPS, TARGET_PROCESSES
+        )
         y_train = np.log1p(y_train)
         return x_train, y_train
 
-    x_train = generate_sample_tensors(generator, bitness, ids, REPS)
+    x_train = generate_sample_tensors(generator, bitness, ids, REPS, TARGET_PROCESSES)
     y_train = approximate_targets(generator, bitness, ids)
     return x_train, y_train
 
@@ -275,7 +275,9 @@ def load_validation_dataset(generator, meta: dict, bitness: int) -> dict[str, np
     ensure_validation_entry(generator, meta, bitness)
     validation = meta["validation"][str(bitness)]
     ids = [int(case_id) for case_id in validation["ids"]]
-    x_validation = generate_sample_tensors(generator, bitness, ids, REPS)
+    x_validation = generate_sample_tensors(
+        generator, bitness, ids, REPS, TARGET_PROCESSES
+    )
     y_validation = np.asarray(
         [np.log1p(generator.case_nodes(bitness, case_id)) for case_id in ids],
         dtype=np.float32,

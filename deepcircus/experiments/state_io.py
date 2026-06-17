@@ -121,7 +121,6 @@ def save_completed_target_state(
         "train_loss": float(train_loss),
         "rmse": float(validation["rmse"]),
         "mae": float(validation["mae"]),
-        "progress": progress,
     }
     save_bitness_checkpoint(
         model,
@@ -130,7 +129,7 @@ def save_completed_target_state(
         model_dir,
         bitness,
     )
-    append_validation_metric(meta, metric, meta_path)
+    append_validation_metric(meta, metric, progress, meta_path)
     return progress
 
 
@@ -154,10 +153,11 @@ def save_experiment_complete_state(
 def append_validation_metric(
     meta: dict[str, Any],
     metric: dict[str, Any],
+    progress: dict[str, int | str],
     meta_path: str,
 ) -> None:
     meta.setdefault("metrics", []).append(metric)
-    # meta["progress"] = metric["progress"]
+    meta["progress"] = progress
     save_experiment_meta(meta, meta_path)
 
 
