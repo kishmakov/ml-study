@@ -129,10 +129,15 @@ class DepthSampler:
         case_id: int,
         reps: int,
     ) -> list[str]:
+        rng = random.Random((self.bitness << 16) + case_id + self.bitness)
         if self.method == "random":
-            return random_input_bits(self.bitness, case_id, reps)
+            return random_input_bits(self.bitness, reps, rng)
         if self.method == "block":
-            return block_inversion_input_bits(self.bitness, case_id, reps)
+            return block_inversion_input_bits(self.bitness, reps, rng)
+        if self.method == "mix":
+            l1 = block_inversion_input_bits(self.bitness, reps // 2, rng)
+            l2 = random_input_bits(self.bitness, reps // 2, rng)
+            return l1 + l2
         assert False, f"Unknown sample mode: {self.method}"
 
 
@@ -155,20 +160,13 @@ def generate_ids(
     return rng.sample(range(generator.cases_number(bitness)), number)
 
 
-def random_input_bits(bitness: int, case_id: int, reps: int) -> list[str]:
-    rng = random.Random((bitness << 32) + case_id)
+def random_input_bits(bitness: int, reps: int, rng: random.Random) -> list[str]:
     return ["".join(rng.choice("01") for _ in range(bitness)) for _ in range(reps)]
 
 
-def block_inversion_input_bits(
-    bitness: int,
-    case_id: int,
-    reps: int,
-) -> list[str]:
+def block_inversion_input_bits(bitness: int, reps: int, rng: random.Random) -> list[str]:
     assert reps > 0
     blocks = (reps - 1).bit_length()
-
-    rng = random.Random((bitness << 32) + case_id)
     base_input = [rng.choice("01") for _ in range(bitness)]
     bit_blocks = _split_bit_blocks(bitness, blocks) if blocks > 0 else []
     samples = []

@@ -34,10 +34,9 @@ LR = 1e-3
 PROCESSES = 16
 SEED = 239
 SAMPLES = (
-    {"key": "random_64", "method": "random", "reps": 64, "label": "random 64"},
     {"key": "random_128", "method": "random", "reps": 128, "label": "random 128"},
-    {"key": "block_64", "method": "block", "reps": 64, "label": "block 64"},
     {"key": "block_128", "method": "block", "reps": 128, "label": "block 128"},
+    {"key": "mix_128", "method": "mix", "reps": 128, "label": "mix 128"},
 )
 
 META_PATH = DEFAULT_META_PATH
