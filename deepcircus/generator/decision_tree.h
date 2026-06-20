@@ -24,6 +24,7 @@ struct DecisionTree {
     std::vector<Node> nodes;
     std::vector<bool> used_bits;
     size_t num_leafs = 0;
+    size_t depth = 0;
 
     size_t AddLeaf(bool value);
 
@@ -33,6 +34,8 @@ struct DecisionTree {
         size_t path_used_count,
         bool required_value,
         std::mt19937& rng);
+
+    void Finalize();
 
     bool Evaluate(std::string_view input) const;
 

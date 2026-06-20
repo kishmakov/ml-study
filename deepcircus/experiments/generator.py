@@ -45,6 +45,9 @@ class Generator:
         library.generator_case_nodes.argtypes = [ctypes.c_uint16, ctypes.c_size_t]
         library.generator_case_nodes.restype = ctypes.c_size_t
 
+        library.generator_case_depth.argtypes = [ctypes.c_uint16, ctypes.c_size_t]
+        library.generator_case_depth.restype = ctypes.c_size_t
+
         library.generator_case_active_bits.argtypes = [ctypes.c_uint16, ctypes.c_size_t]
         library.generator_case_active_bits.restype = ctypes.c_char_p
 
@@ -68,6 +71,9 @@ class Generator:
 
     def case_nodes(self, bitness: int, case_id: int) -> int:
         return int(self.library.generator_case_nodes(bitness, case_id))
+
+    def case_depth(self, bitness: int, case_id: int) -> int:
+        return int(self.library.generator_case_depth(bitness, case_id))
 
     def case_active_bits(self, bitness: int, case_id: int) -> str:
         return self.library.generator_case_active_bits(bitness, case_id).decode("ascii")

@@ -15,6 +15,9 @@ size_t generator_get_cases_number(uint16_t bitness);
 // Computes number of nodes for given case
 size_t generator_case_nodes(uint16_t bitness, size_t case_id);
 
+// Computes depth of the tree for given case
+size_t generator_case_depth(uint16_t bitness, size_t case_id);
+
 // Returns 0/1 masked representation of active bits
 const char* generator_case_active_bits(uint16_t bitness, size_t case_id);
 

@@ -66,6 +66,7 @@ public:
     DecisionTree Build() {
         tree_.nodes.push_back(false);
         BuildNodes(0, {});
+        tree_.Finalize();
         return std::move(tree_);
     }
 
@@ -258,6 +259,7 @@ bool WriteTree(std::ostream& out, const DecisionTree& tree) {
 bool ReadTree(const uint8_t*& cursor, const uint8_t* end, uint16_t bitness, DecisionTree& tree) {
     uint64_t node_count = 0;
     if (!ReadPod(cursor, end, node_count) ||
+        node_count == 0 ||
         node_count > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
         return false;
     }
@@ -295,6 +297,7 @@ bool ReadTree(const uint8_t*& cursor, const uint8_t* end, uint16_t bitness, Deci
         }
     }
 
+    loaded.Finalize();
     tree = std::move(loaded);
     return true;
 }

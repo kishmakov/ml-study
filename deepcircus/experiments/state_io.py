@@ -1,4 +1,4 @@
-"""Disk persistence for DeepCircus pooling experiments."""
+"""Disk persistence for DeepCircus experiments."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ import torch
 
 
 DEFAULT_MODEL_DIR = "/tmp/circus"
-DEFAULT_META_PATH = join(DEFAULT_MODEL_DIR, "experiment_pooling.json")
+DEFAULT_META_PATH = join(DEFAULT_MODEL_DIR, "experiment.json")
 
 
 def ensure_model_dir(model_dir: str) -> None:

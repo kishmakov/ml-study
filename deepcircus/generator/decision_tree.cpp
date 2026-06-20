@@ -40,6 +40,17 @@ size_t MaxInternalNodes(size_t free_bits) {
     return (size_t{1} << free_bits) - 1;
 }
 
+size_t ComputeDepth(const std::vector<Node>& nodes, size_t node_id) {
+    const Node& node = nodes[node_id];
+    const Div* division = std::get_if<Div>(&node);
+    if (division == nullptr) {
+        return 0;
+    }
+    return 1 + std::max(
+        ComputeDepth(nodes, division->child0),
+        ComputeDepth(nodes, division->child1));
+}
+
 }  // namespace
 
 DecisionTree::DecisionTree(uint16_t bitness)
@@ -105,6 +116,11 @@ size_t DecisionTree::BuildSubtree(
     path_used_bits[bit_id] = false;
     nodes[node_id] = Div{bit_id, child0, child1};
     return node_id;
+}
+
+void DecisionTree::Finalize() {
+    assert(!nodes.empty());
+    depth = ComputeDepth(nodes, 0);
 }
 
 bool DecisionTree::Evaluate(std::string_view input) const {

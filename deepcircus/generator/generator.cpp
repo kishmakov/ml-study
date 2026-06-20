@@ -27,6 +27,7 @@ DecisionTree RandomTree(uint16_t bitness, std::mt19937& rng, size_t target_size)
 
     if (target_size == 0) { // Pure leaf tree
         tree.AddLeaf(RandomBool(rng));
+        tree.Finalize();
         return tree;
     }
 
@@ -37,6 +38,7 @@ DecisionTree RandomTree(uint16_t bitness, std::mt19937& rng, size_t target_size)
         /*path_used_count=*/0,
         RandomBool(rng),
         rng);
+    tree.Finalize();
     return tree;
 }
 
@@ -119,6 +121,13 @@ size_t generator_case_nodes(uint16_t bitness, size_t case_id) {
 
     const DecisionTree& tree = GetRandomTree(bitness, case_id);
     return tree.nodes.size() - tree.num_leafs;
+}
+
+size_t generator_case_depth(uint16_t bitness, size_t case_id) {
+    assert(case_id < generator_get_cases_number(bitness));
+
+    const DecisionTree& tree = GetRandomTree(bitness, case_id);
+    return tree.depth;
 }
 
 const char* generator_case_active_bits(uint16_t bitness, size_t case_id) {

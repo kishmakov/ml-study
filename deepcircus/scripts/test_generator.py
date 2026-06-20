@@ -24,6 +24,9 @@ def load_library():
     library.generator_get_cases_number.argtypes = [ctypes.c_uint16]
     library.generator_get_cases_number.restype = ctypes.c_size_t
 
+    library.generator_case_depth.argtypes = [ctypes.c_uint16, ctypes.c_size_t]
+    library.generator_case_depth.restype = ctypes.c_size_t
+
     library.generator_case_value.argtypes = [
         ctypes.c_uint16,
         ctypes.c_size_t,
@@ -98,7 +101,16 @@ def test_case_restrictions(library):
                 assert value_chunk == expected
 
 
+def test_case_depth(library):
+    print(f"Check generator_case_depth ...")
+
+    for bitness, case_id, _ in GOLDEN_VALUES:
+        depth = library.generator_case_depth(bitness, case_id)
+        assert 0 <= depth <= bitness
+
+
 if __name__ == "__main__":
     library = load_library()
     test_case_value(library)
     test_case_restrictions(library)
+    test_case_depth(library)

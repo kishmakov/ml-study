@@ -1,5 +1,9 @@
+import numpy as np
 import torch
 import torch.nn as nn
+
+PREDICT_BATCH_SIZE = 1024
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 # ── Model ─────────────────────────────────────────────────────────────────────
 
@@ -43,3 +47,33 @@ class DeepSetPredictor(nn.Module):
         # symmetric pooling over the point dimension
         pooled = torch.cat([h.sum(dim=1), h.max(dim=1).values], dim=-1)
         return self.rho(pooled)  # raw logits, (batch, 1)
+
+
+def predict_values(model: nn.Module, x: np.ndarray) -> np.ndarray:
+    model.to(DEVICE)
+    model.eval()
+
+    predictions = []
+    with torch.no_grad():
+        for start in range(0, len(x), PREDICT_BATCH_SIZE):
+            xb = torch.as_tensor(
+                x[start : start + PREDICT_BATCH_SIZE],
+                dtype=torch.float32,
+                device=DEVICE,
+            )
+            predictions.append(model(xb).cpu().numpy().ravel())
+
+    return np.concatenate(predictions).astype(np.float32)
+
+
+def regression_metrics(predictions: np.ndarray, targets: np.ndarray) -> dict[str, float]:
+    errors = predictions - targets
+    absolute_errors = np.abs(errors)
+    return {
+        "rmse": float(np.sqrt(np.mean(np.square(errors)))),
+        "mad": float(np.mean(absolute_errors)),
+    }
+
+
+def evaluate_regression(model: nn.Module, x: np.ndarray, y: np.ndarray) -> dict[str, float]:
+    return regression_metrics(predict_values(model, x), y)

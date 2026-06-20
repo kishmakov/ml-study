@@ -1,18 +1,23 @@
-import time
-
 import numpy as np
+import time
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 
+from experiments.model import (
+    DEVICE,
+    PREDICT_BATCH_SIZE,
+    DeepSetPredictor,
+    evaluate_regression,
+    predict_values,
+)
 from experiments.sampler import (
     generate_ids,
     generate_restriction_tensors,
     generate_sample_tensors,
     generate_samples,
 )
-from experiments.model import DeepSetPredictor
 from experiments.state_io import (
     DEFAULT_META_PATH,
     DEFAULT_MODEL_DIR,
@@ -24,10 +29,6 @@ from experiments.state_io import (
     save_experiment_complete_state,
     save_experiment_meta,
 )
-
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-MODEL_DIR = DEFAULT_MODEL_DIR
-META_PATH = DEFAULT_META_PATH
 
 TRAIN_SAMPLES = 1 << 12
 VALIDATION_SAMPLES = 128
@@ -44,28 +45,17 @@ REPS = 128
 MODELS = {}
 THRESHOLD = 0.025
 
-PREDICT_BATCH_SIZE = 1024
 TARGET_CASE_BATCH_SIZE = 128
 TARGET_PROCESSES = 16
 SEED_OFFSET = 239
 VALIDATION_SEED_OFFSET = 1_000_239
 
-
-def predict_values(model: nn.Module, x: np.ndarray) -> np.ndarray:
-    model.to(DEVICE)
-    model.eval()
-
-    predictions = []
-    with torch.no_grad():
-        for start in range(0, len(x), PREDICT_BATCH_SIZE):
-            xb = torch.as_tensor(
-                x[start : start + PREDICT_BATCH_SIZE],
-                dtype=torch.float32,
-                device=DEVICE,
-            )
-            predictions.append(model(xb).cpu().numpy().ravel())
-
-    return np.concatenate(predictions).astype(np.float32)
+GROUPS = (
+    (4, 10),
+    (11, 18),
+    (19, 25),
+    (26, 32),
+)
 
 
 def approximate_targets(generator, bitness: int, case_ids: list[int]) -> np.ndarray:
@@ -122,24 +112,23 @@ def evaluate_validation(
     x_validation: np.ndarray,
     y_validation: np.ndarray,
 ) -> dict[str, float]:
-    predictions = predict_values(model, x_validation)
-    errors = predictions - y_validation
+    metrics = evaluate_regression(model, x_validation, y_validation)
     return {
-        "rmse": float(np.sqrt(np.mean(np.square(errors)))),
-        "mae": float(np.mean(np.abs(errors))),
+        "rmse": metrics["rmse"],
+        "mae": metrics["mad"],
     }
 
 
-def train(
-    bitness: int,
+def train_regression_model(
+    model: nn.Module,
     x_train: np.ndarray,
     y_train: np.ndarray,
     *,
-    epochs: int = TRAIN_EPOCHS,
-    batch_size: int = BATCH_SIZE,
-    lr: float = LR,
+    epochs: int,
+    batch_size: int,
+    lr: float,
+    threshold: float | None = None,
 ) -> float:
-    model = MODELS.get(bitness)
     model.to(DEVICE)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
@@ -155,8 +144,8 @@ def train(
     loader = DataLoader(TensorDataset(x, y), batch_size=batch_size, shuffle=True)
 
     final_loss = float("inf")
-    model.train()
     for epoch in range(1, epochs + 1):
+        model.train()
         epoch_start = time.perf_counter()
         epoch_loss = 0.0
         for xb, yb in loader:
@@ -172,7 +161,8 @@ def train(
         epoch_elapsed = time.perf_counter() - epoch_start
         final_loss = float(epoch_loss)
 
-        if epoch_loss < THRESHOLD or epoch % 10 == 0:
+        should_log = threshold is not None and epoch_loss < threshold
+        if should_log or epoch % 10 == 0:
             print(
                 f"Epoch {epoch:>3}/{epochs}  "
                 f"loss={epoch_loss:.4f}  "
@@ -180,31 +170,53 @@ def train(
                 f"device={DEVICE}"
             )
 
-        if epoch_loss < THRESHOLD:
+        if threshold is not None and epoch_loss < threshold:
             break
 
     return final_loss
 
 
+def train(
+    bitness: int,
+    x_train: np.ndarray,
+    y_train: np.ndarray,
+    *,
+    epochs: int = TRAIN_EPOCHS,
+    batch_size: int = BATCH_SIZE,
+    lr: float = LR,
+) -> float:
+    model = MODELS.get(bitness)
+    return train_regression_model(
+        model,
+        x_train,
+        y_train,
+        epochs=epochs,
+        batch_size=batch_size,
+        lr=lr,
+        threshold=THRESHOLD,
+    )
+
+
 def run_experiment(generator):
-    ensure_model_dir(MODEL_DIR)
+    ensure_model_dir(DEFAULT_MODEL_DIR)
     config = build_config()
     meta = load_or_create_experiment_meta(
-        META_PATH,
+        DEFAULT_META_PATH,
         config,
         initial_progress(config),
         create_validation_config,
     )
+    ensure_plot_series(meta)
     progress = meta["progress"]
     if progress["stage"] == "done":
-        print(f"training already complete: {META_PATH}")
+        print(f"training already complete: {DEFAULT_META_PATH}")
         return
 
     validation = {}
     for bitness in range(MIN_BITNESS, MAX_BITNESS + 1):
         point_dim = 2 * bitness + 1
         MODELS[bitness] = DeepSetPredictor(point_dim)
-        checkpoint = load_model_checkpoint_if_exists(MODEL_DIR, bitness, DEVICE)
+        checkpoint = load_model_checkpoint_if_exists(DEFAULT_MODEL_DIR, bitness, DEVICE)
         if checkpoint is not None:
             MODELS[bitness].load_state_dict(checkpoint["state_dict"])
 
@@ -233,22 +245,22 @@ def run_experiment(generator):
             )
             save_completed_target_state(
                 meta,
-                META_PATH,
+                DEFAULT_META_PATH,
                 MODELS[bitness],
                 config,
-                MODEL_DIR,
+                DEFAULT_MODEL_DIR,
                 bitness,
                 iteration,
                 loss,
                 validation_result,
             )
 
-    save_experiment_complete_state(meta, META_PATH, config)
+    save_experiment_complete_state(meta, DEFAULT_META_PATH, config)
 
 
 def build_config() -> dict:
     return {
-        "model_dir": MODEL_DIR,
+        "DEFAULT_MODEL_DIR": DEFAULT_MODEL_DIR,
         "train_samples": TRAIN_SAMPLES,
         "validation_samples": VALIDATION_SAMPLES,
         "min_bitness": MIN_BITNESS,
@@ -269,6 +281,44 @@ def build_config() -> dict:
 
 def create_validation_config() -> dict[str, dict[str, list[int]]]:
     return {}
+
+
+def ensure_plot_series(meta: dict) -> None:
+    plot_series = build_plot_series()
+    if meta.get("series") == plot_series:
+        return
+
+    meta["series"] = plot_series
+    meta.pop("plot_series", None)
+    save_experiment_meta(meta, DEFAULT_META_PATH)
+
+
+def build_plot_series() -> list[dict]:
+    series = []
+    for start, end in GROUPS:
+        start = max(start, MIN_BITNESS)
+        end = min(end, MAX_BITNESS)
+        if start > end:
+            continue
+        series.append(
+            {
+                "name": f"pooling_b{start:02d}_b{end:02d}",
+                "title": f"Pooling validation metrics, bitness {start}-{end}",
+                "x_label": "Iteration",
+                "legend_title": "Bitness",
+                "lines": [
+                    {
+                        "label": str(bitness),
+                        "where": {"bitness": bitness},
+                        "x_key": "iteration",
+                        "mae_key": "mae",
+                        "rmse_key": "rmse",
+                    }
+                    for bitness in range(start, end + 1)
+                ],
+            }
+        )
+    return series
 
 
 def load_validation_dataset(generator, meta: dict, bitness: int) -> dict[str, np.ndarray]:
@@ -302,4 +352,4 @@ def ensure_validation_entry(generator, meta: dict, bitness: int) -> None:
     meta["validation"][key] = {
         "ids": ids,
     }
-    save_experiment_meta(meta, META_PATH)
+    save_experiment_meta(meta, DEFAULT_META_PATH)

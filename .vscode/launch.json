@@ -6,11 +6,9 @@
       "type": "debugpy",
       "request": "launch",
       "program": "${workspaceFolder}/deepcircus/scripts/run.py",
+      "args": ["depth"],
       "console": "integratedTerminal",
-      "env": {
-        "ENV_ID": "cylinder_game",
-        "TRAIN_TIME_LIMIT": "60"
-      },
+      "env": {},
       "python": "${workspaceFolder}/deepcircus/.venv/bin/python",
       "cwd": "${workspaceFolder}/deepcircus"
     }
