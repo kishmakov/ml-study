@@ -10,9 +10,8 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from experiments.generator import sample_point_dim
 from experiments.model import DEVICE, DeepSetPredictor, regression_metrics
-from experiments.sampler import generate_ids, make_depth_sample_loader
+from experiments.sampler import DepthSampler
 from experiments.state_io import (
     DEFAULT_META_PATH,
     DEFAULT_MODEL_DIR,
@@ -26,20 +25,20 @@ from experiments.state_io import (
 
 BITNESS = 16
 TRAIN_SAMPLES = 1 << 15
-VALIDATION_SAMPLES = 1024
+VALIDATION_SAMPLES = 1 << 15
 
 TRAIN_EPOCHS = 500
 BATCH_SIZE = 256
 LR = 1e-3
 
-REPS = 128
 PROCESSES = 16
 SEED = 239
-SAMPLE_MODES = ("random", "block")
-SAMPLE_MODE_LABELS = {
-    "random": "random",
-    "block": "block",
-}
+SAMPLES = (
+    {"key": "random_64", "method": "random", "reps": 64, "label": "random 64"},
+    {"key": "random_128", "method": "random", "reps": 128, "label": "random 128"},
+    {"key": "block_64", "method": "block", "reps": 64, "label": "block 64"},
+    {"key": "block_128", "method": "block", "reps": 128, "label": "block 128"},
+)
 
 META_PATH = DEFAULT_META_PATH
 
@@ -53,42 +52,35 @@ def run_experiment(generator) -> None:
         print(f"training already complete: {META_PATH}")
         return
 
-    train_ids = [int(case_id) for case_id in meta["ids"]["train"]]
-    validation_ids = [int(case_id) for case_id in meta["ids"]["validation"]]
-
     states = {
-        sample_mode: build_training_state(
-            generator,
-            train_ids,
-            validation_ids,
-            sample_mode,
-        )
-        for sample_mode in SAMPLE_MODES
+        sample["key"]: build_training_state(build_sampler(generator, sample))
+        for sample in SAMPLES
     }
 
     for epoch in range(1, TRAIN_EPOCHS + 1):
-        for sample_mode in SAMPLE_MODES:
-            loader_progress = meta["progress"]["loaders"][sample_mode]
+        for sample in SAMPLES:
+            sample_key = sample["key"]
+            loader_progress = meta["progress"]["loaders"][sample_key]
             if loader_progress["stage"] == "done" or loader_progress["epoch"] >= epoch:
                 continue
 
-            state = states[sample_mode]
+            state = states[sample_key]
             train_metrics = train_regression_epoch(
                 state["model"],
                 state["train_loader"],
                 state["optimizer"],
                 state["scheduler"],
-                desc=f"depth {sample_mode} epoch {epoch}/{TRAIN_EPOCHS}",
+                desc=f"depth {sample_key} epoch {epoch}/{TRAIN_EPOCHS}",
             )
             validation_metrics = evaluate_regression_loader(
                 state["model"],
                 state["validation_loader"],
             )
-            save_sample_mode_metrics(
+            save_sample_metrics(
                 meta,
                 config,
                 state["model"],
-                sample_mode,
+                sample,
                 epoch,
                 train_metrics,
                 validation_metrics,
@@ -104,8 +96,8 @@ def build_config() -> dict[str, Any]:
         "model_dir": DEFAULT_MODEL_DIR,
         "meta_path": META_PATH,
         "checkpoint_paths": {
-            sample_mode: checkpoint_path_for(sample_mode)
-            for sample_mode in SAMPLE_MODES
+            sample["key"]: checkpoint_path_for(sample)
+            for sample in SAMPLES
         },
         "bitness": BITNESS,
         "train_samples": TRAIN_SAMPLES,
@@ -113,10 +105,9 @@ def build_config() -> dict[str, Any]:
         "train_epochs": TRAIN_EPOCHS,
         "batch_size": BATCH_SIZE,
         "lr": LR,
-        "reps": REPS,
         "processes": PROCESSES,
         "seed": SEED,
-        "sample_modes": list(SAMPLE_MODES),
+        "samples": [dict(sample) for sample in SAMPLES],
     }
 
 
@@ -127,22 +118,12 @@ def load_or_create_depth_meta(generator, config: dict[str, Any]) -> dict[str, An
         print(f"resuming from {META_PATH}: progress={meta['progress']}")
         return meta
 
-    ids = generate_ids(
-        generator,
-        BITNESS,
-        TRAIN_SAMPLES + VALIDATION_SAMPLES,
-        SEED,
-    )
     meta = {
         "config": config,
         "progress": {
             "stage": "train",
             "global_step": 0,
             "loaders": initial_loader_progress(),
-        },
-        "ids": {
-            "train": ids[:TRAIN_SAMPLES],
-            "validation": ids[TRAIN_SAMPLES:],
         },
         "metrics": [],
         "series": build_plot_series(),
@@ -153,20 +134,21 @@ def load_or_create_depth_meta(generator, config: dict[str, Any]) -> dict[str, An
 
 def build_plot_series() -> list[dict[str, Any]]:
     lines = []
-    for sample_mode in SAMPLE_MODES:
-        label = SAMPLE_MODE_LABELS[sample_mode]
+    for sample in SAMPLES:
+        sample_key = sample["key"]
+        label = sample["label"]
         lines.extend(
             [
                 {
                     "label": f"{label} train",
-                    "where": {"loader": sample_mode},
+                    "where": {"loader": sample_key},
                     "x_key": "epoch",
                     "mae_key": "train_mae",
                     "rmse_key": "train_rmse",
                 },
                 {
                     "label": f"{label} validation",
-                    "where": {"loader": sample_mode},
+                    "where": {"loader": sample_key},
                     "x_key": "epoch",
                     "mae_key": "validation_mae",
                     "rmse_key": "validation_rmse",
@@ -183,47 +165,32 @@ def build_plot_series() -> list[dict[str, Any]]:
     ]
 
 
-def build_loader(
+def build_sampler(
     generator,
-    case_ids: list[int],
-    *,
-    sample_mode: str,
-    shuffle: bool,
-):
-    return make_depth_sample_loader(
+    sample: dict[str, Any],
+) -> DepthSampler:
+    return DepthSampler(
         generator,
         BITNESS,
-        case_ids,
-        REPS,
-        BATCH_SIZE,
-        PROCESSES,
-        sample_mode=sample_mode,
-        shuffle=shuffle,
-        drop_last=shuffle,
+        SEED,
+        TRAIN_SAMPLES,
+        VALIDATION_SAMPLES,
+        sample["key"],
+        sample["method"],
+        sample["reps"],
+        batch_size=BATCH_SIZE,
+        workers=PROCESSES,
     )
 
 
 def build_training_state(
-    generator,
-    train_ids: list[int],
-    validation_ids: list[int],
-    sample_mode: str,
+    sampler: DepthSampler,
 ) -> dict[str, Any]:
-    train_loader = build_loader(
-        generator,
-        train_ids,
-        sample_mode=sample_mode,
-        shuffle=True,
-    )
-    validation_loader = build_loader(
-        generator,
-        validation_ids,
-        sample_mode=sample_mode,
-        shuffle=False,
-    )
+    sample_key = sampler.name
+    train_loader, validation_loader = sampler.training_inputs()
 
-    model = DeepSetPredictor(sample_point_dim(BITNESS))
-    checkpoint_path = checkpoint_path_for(sample_mode)
+    model = DeepSetPredictor(**sampler.model_params())
+    checkpoint_path = checkpoint_path_for_name(sample_key)
     if exists(checkpoint_path):
         checkpoint = load_training_checkpoint(checkpoint_path, DEVICE)
         model.load_state_dict(checkpoint["state_dict"])
@@ -244,15 +211,16 @@ def build_training_state(
     }
 
 
-def save_sample_mode_metrics(
+def save_sample_metrics(
     meta: dict[str, Any],
     config: dict[str, Any],
     model: nn.Module,
-    sample_mode: str,
+    sample: dict[str, Any],
     epoch: int,
     train_metrics: dict[str, float],
     validation_metrics: dict[str, float],
 ) -> None:
+    sample_key = sample["key"]
     global_step = int(meta["progress"]["global_step"]) + 1
     progress = {
         "stage": "train" if epoch < TRAIN_EPOCHS else "done",
@@ -262,7 +230,9 @@ def save_sample_mode_metrics(
         "global_step": global_step,
         "epoch": epoch,
         "bitness": BITNESS,
-        "loader": sample_mode,
+        "loader": sample_key,
+        "method": sample["method"],
+        "reps": sample["reps"],
         "train_loss": train_metrics["loss"],
         "train_rmse": train_metrics["rmse"],
         "train_mae": train_metrics["mad"],
@@ -271,12 +241,12 @@ def save_sample_mode_metrics(
     }
     meta.setdefault("metrics", []).append(metric)
     meta["progress"]["global_step"] = global_step
-    meta["progress"]["loaders"][sample_mode] = progress
+    meta["progress"]["loaders"][sample_key] = progress
     meta["progress"]["stage"] = overall_stage(meta)
-    save_training_checkpoint(model, config, progress, checkpoint_stem_for(sample_mode))
+    save_training_checkpoint(model, config, progress, checkpoint_stem_for(sample))
     save_experiment_meta(meta, META_PATH)
     print(
-        f"depth loader={sample_mode} epoch={epoch:>3}  "
+        f"depth loader={sample_key} epoch={epoch:>3}  "
         f"train_rmse={metric['train_rmse']:.4f}  "
         f"train_mae={metric['train_mae']:.4f}  "
         f"validation_rmse={metric['validation_rmse']:.4f}  "
@@ -286,11 +256,11 @@ def save_sample_mode_metrics(
 
 def initial_loader_progress() -> dict[str, dict[str, int | str]]:
     return {
-        sample_mode: {
+        sample["key"]: {
             "stage": "train",
             "epoch": 0,
         }
-        for sample_mode in SAMPLE_MODES
+        for sample in SAMPLES
     }
 
 
@@ -303,12 +273,20 @@ def overall_stage(meta: dict[str, Any]) -> str:
     return "train"
 
 
-def checkpoint_stem_for(sample_mode: str) -> str:
-    return join(DEFAULT_MODEL_DIR, f"depth_{sample_mode}_b{BITNESS:02d}")
+def checkpoint_stem_for(sample: dict[str, Any]) -> str:
+    return checkpoint_stem_for_name(sample["key"])
 
 
-def checkpoint_path_for(sample_mode: str) -> str:
-    return checkpoint_stem_for(sample_mode) + ".pt"
+def checkpoint_stem_for_name(sample_key: str) -> str:
+    return join(DEFAULT_MODEL_DIR, f"depth_{sample_key}_b{BITNESS:02d}")
+
+
+def checkpoint_path_for(sample: dict[str, Any]) -> str:
+    return checkpoint_stem_for(sample) + ".pt"
+
+
+def checkpoint_path_for_name(sample_key: str) -> str:
+    return checkpoint_stem_for_name(sample_key) + ".pt"
 
 
 def evaluate_regression_loader(

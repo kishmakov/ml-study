@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import numpy as np
 import random
-from pathlib import Path
 import torch
+from tqdm import tqdm
 
 from experiments.generator import (
     Generator,
-    _sample_block_inversions,
-    _sample_value,
+    generate_depths_tensors,
     generate_restriction_tensors as _generate_restriction_tensors,
     generate_value_tensors,
+    sample_point_dim,
 )
 
 torch.multiprocessing.set_sharing_strategy("file_system")
@@ -21,61 +21,128 @@ _RESTRICTION_TENSOR_CACHE = {}
 _SAMPLE_TARGET_CACHE = {}
 
 
-class DepthSampleDataset(torch.utils.data.IterableDataset):
+class DepthSampler:
     def __init__(
         self,
         generator: Generator,
         bitness: int,
-        case_ids: list[int],
-        reps: int,
-        *,
-        sample_mode: str,
-        shuffle: bool,
         seed: int,
+        train_size: int,
+        validation_size: int,
+        name: str,
+        method: str,
+        reps: int,
+        batch_size: int,
+        workers: int,
     ):
-        self.library_path = generator.library_path
+        self.generator = generator
         self.bitness = bitness
-        self.case_ids = [int(case_id) for case_id in case_ids]
-        self.reps = reps
-        self.sample_mode = sample_mode
-        self.shuffle = shuffle
         self.seed = seed
-        self._epoch = 0
-        self._generator = None
+        self.train_size = train_size
+        self.validation_size = validation_size
+        self.name = name
+        self.method = method
+        self.reps = reps
+        self.batch_size = batch_size
+        self.workers = workers
 
-    def __len__(self) -> int:
-        return len(self.case_ids)
+        ids = generate_ids(generator, bitness, train_size + validation_size, seed)
+        train_ids = ids[:train_size]
+        validation_ids = ids[train_size:]
+        self.train_ids = [int(case_id) for case_id in train_ids]
+        self.validation_ids = [int(case_id) for case_id in validation_ids]
+        assert len(self.train_ids) == train_size
+        assert len(self.validation_ids) == validation_size
+        self._train_samples = None
+        self._validation_samples = None
 
-    def __iter__(self):
-        generator = self._get_generator()
-        worker = torch.utils.data.get_worker_info()
-        worker_id = 0 if worker is None else worker.id
-        workers = 1 if worker is None else worker.num_workers
-        case_ids = [
-            case_id for case_id in self.case_ids
-            if case_id % workers == worker_id
+    def training_inputs(
+        self,
+    ) -> tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader]:
+        return self.train_loader(), self.validation_loader()
+
+    def model_params(self) -> dict[str, int]:
+        return {"point_dim": sample_point_dim(self.bitness)}
+
+    def train_loader(self) -> torch.utils.data.DataLoader:
+        if self._train_samples is None:
+            self._train_samples = self._sample_cases(self.train_ids)
+        return self._loader(*self._train_samples, True)
+
+    def validation_loader(self) -> torch.utils.data.DataLoader:
+        if self._validation_samples is None:
+            self._validation_samples = self._sample_cases(self.validation_ids)
+        return self._loader(*self._validation_samples, False)
+
+    def _sample_cases(
+        self,
+        case_ids: list[int],
+    ) -> tuple[np.ndarray, np.ndarray]:
+        input_bits = [
+            self._sample_input_bits(case_id, self.reps)
+            for case_id in tqdm(
+                case_ids,
+                desc=f"inputs {self.method}",
+            )
         ]
-        if self.shuffle:
-            self._epoch += 1
-            rng = random.Random(self.seed + self._epoch * workers + worker_id)
-            rng.shuffle(case_ids)
-
-        for case_id in case_ids:
-            yield self._sample(generator, case_id)
-
-    def _sample(self, generator: Generator, case_id: int) -> tuple[np.ndarray, np.float32]:
-        x = sample_depth_case(generator, self.bitness, case_id, self.reps, self.sample_mode)
-        y = np.float32(generator.case_depth(self.bitness, case_id))
+        x = generate_value_tensors(
+            self.generator,
+            self.bitness,
+            case_ids,
+            input_bits,
+            self.workers,
+        )
+        y = generate_depths_tensors(self.generator, self.bitness, case_ids, self.workers)
+        print(
+            f"Generated {len(x)} depth samples; "
+            f"sample_shape={tuple(x.shape[1:])}"
+        )
+        if len(x) > 0:
+            print("First sample:")
+            for rep in _sample_to_bit_strings(x[0]):
+                print(rep)
         return x, y
 
-    def _get_generator(self) -> Generator:
-        if self._generator is None:
-            self._generator = Generator(Path(self.library_path))
-        return self._generator
+    def _loader(
+        self,
+        x: np.ndarray,
+        y: np.ndarray,
+        shuffle: bool,
+    ) -> torch.utils.data.DataLoader:
+        dataset = torch.utils.data.TensorDataset(
+            torch.from_numpy(x),
+            torch.from_numpy(y),
+        )
+        generator = torch.Generator()
+        generator.manual_seed(self.seed + int(shuffle))
+        return torch.utils.data.DataLoader(
+            dataset,
+            batch_size=self.batch_size,
+            shuffle=shuffle,
+            generator=generator,
+            pin_memory=torch.cuda.is_available(),
+            drop_last=shuffle,
+        )
+
+    def _sample_input_bits(
+        self,
+        case_id: int,
+        reps: int,
+    ) -> list[str]:
+        if self.method == "random":
+            return random_input_bits(self.bitness, case_id, reps)
+        if self.method == "block":
+            return block_inversion_input_bits(self.bitness, case_id, reps)
+        assert False, f"Unknown sample mode: {self.method}"
 
 
 def _case_ids_key(case_ids) -> tuple[int, ...]:
     return tuple(int(case_id) for case_id in case_ids)
+
+
+def _sample_to_bit_strings(sample: np.ndarray) -> list[str]:
+    bits = (sample > 0).astype(np.uint8).T
+    return ["".join(str(bit) for bit in row) for row in bits]
 
 
 def generate_ids(
@@ -88,62 +155,46 @@ def generate_ids(
     return rng.sample(range(generator.cases_number(bitness)), number)
 
 
-def make_depth_sample_loader(
-    generator: Generator,
-    bitness: int,
-    case_ids: list[int],
-    reps: int,
-    batch_size: int,
-    workers: int,
-    *,
-    sample_mode: str,
-    shuffle: bool,
-    drop_last: bool = False,
-) -> torch.utils.data.DataLoader:
-    dataset = DepthSampleDataset(
-        generator,
-        bitness,
-        case_ids,
-        reps,
-        sample_mode=sample_mode,
-        shuffle=shuffle,
-        seed=bitness + len(case_ids),
-    )
-    kwargs = {}
-    if workers > 0:
-        kwargs = {
-            "multiprocessing_context": "fork",
-            "persistent_workers": True,
-            "prefetch_factor": 4,
-        }
-    return torch.utils.data.DataLoader(
-        dataset,
-        batch_size=batch_size,
-        num_workers=workers,
-        pin_memory=torch.cuda.is_available(),
-        collate_fn=_collate_numpy_batch,
-        drop_last=drop_last,
-        **kwargs,
-    )
+def random_input_bits(bitness: int, case_id: int, reps: int) -> list[str]:
+    rng = random.Random((bitness << 32) + case_id)
+    return ["".join(rng.choice("01") for _ in range(bitness)) for _ in range(reps)]
 
 
-def _collate_numpy_batch(batch):
-    x, y = zip(*batch)
-    return np.stack(x).astype(np.float32), np.asarray(y, dtype=np.float32)
-
-
-def sample_depth_case(
-    generator: Generator,
+def block_inversion_input_bits(
     bitness: int,
     case_id: int,
     reps: int,
-    sample_mode: str,
-) -> np.ndarray:
-    if sample_mode == "random":
-        return _sample_value(generator, bitness, case_id, reps)
-    if sample_mode == "block":
-        return _sample_block_inversions(generator, bitness, case_id, reps)
-    assert False, f"Unknown sample mode: {sample_mode}"
+) -> list[str]:
+    assert reps > 0
+    blocks = (reps - 1).bit_length()
+
+    rng = random.Random((bitness << 32) + case_id)
+    base_input = [rng.choice("01") for _ in range(bitness)]
+    bit_blocks = _split_bit_blocks(bitness, blocks) if blocks > 0 else []
+    samples = []
+
+    for mask in range(reps):
+        input_bits = base_input.copy()
+        for block_id, bit_ids in enumerate(bit_blocks):
+            if ((mask >> block_id) & 1) == 0:
+                continue
+            for bit_id in bit_ids:
+                input_bits[bit_id] = "0" if input_bits[bit_id] == "1" else "1"
+        samples.append("".join(input_bits))
+
+    return samples
+
+
+def _split_bit_blocks(bitness: int, blocks: int) -> list[range]:
+    base_size = bitness // blocks
+    remainder = bitness % blocks
+    result = []
+    start = 0
+    for block_id in range(blocks):
+        size = base_size + (1 if block_id < remainder else 0)
+        result.append(range(start, start + size))
+        start += size
+    return result
 
 
 def generate_sample_tensors(
@@ -159,7 +210,8 @@ def generate_sample_tensors(
         return _SAMPLE_TENSOR_CACHE[cache_key]
 
     print(f"Generating {len(case_ids)} sample tensors for bitness {bitness}")
-    x = generate_value_tensors(generator, bitness, case_ids, reps, processes)
+    input_bits = [random_input_bits(bitness, case_id, reps) for case_id in case_ids]
+    x = generate_value_tensors(generator, bitness, case_ids, input_bits, processes)
 
     # _SAMPLE_TENSOR_CACHE[cache_key] = x
     return x
