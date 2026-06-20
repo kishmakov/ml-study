@@ -122,6 +122,45 @@ def _sample_value(
     return samples
 
 
+def _sample_block_inversions(
+    generator: Generator,
+    bitness: int,
+    case_id: int,
+    reps: int,
+    blocks: int = 7,
+) -> np.ndarray:
+    assert reps == (1 << blocks)
+
+    rng = random.Random((bitness << 32) + case_id)
+    base_input = [rng.choice("01") for _ in range(bitness)]
+    bit_blocks = _split_bit_blocks(bitness, blocks)
+    point_dim = sample_point_dim(bitness)
+    samples = np.empty((reps, point_dim), dtype=np.float32)
+
+    for mask in range(reps):
+        input_bits = base_input.copy()
+        for block_id, bit_ids in enumerate(bit_blocks):
+            if ((mask >> block_id) & 1) == 0:
+                continue
+            for bit_id in bit_ids:
+                input_bits[bit_id] = "0" if input_bits[bit_id] == "1" else "1"
+        samples[mask] = generator.case_value(bitness, case_id, "".join(input_bits))
+
+    return samples
+
+
+def _split_bit_blocks(bitness: int, blocks: int) -> list[range]:
+    base_size = bitness // blocks
+    remainder = bitness % blocks
+    result = []
+    start = 0
+    for block_id in range(blocks):
+        size = base_size + (1 if block_id < remainder else 0)
+        result.append(range(start, start + size))
+        start += size
+    return result
+
+
 def _sample_restrictions(
     generator: Generator,
     bitness: int,

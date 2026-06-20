@@ -7,6 +7,7 @@ import torch
 
 from experiments.generator import (
     Generator,
+    _sample_block_inversions,
     _sample_value,
     generate_restriction_tensors as _generate_restriction_tensors,
     generate_value_tensors,
@@ -28,6 +29,7 @@ class DepthSampleDataset(torch.utils.data.IterableDataset):
         case_ids: list[int],
         reps: int,
         *,
+        sample_mode: str,
         shuffle: bool,
         seed: int,
     ):
@@ -35,6 +37,7 @@ class DepthSampleDataset(torch.utils.data.IterableDataset):
         self.bitness = bitness
         self.case_ids = [int(case_id) for case_id in case_ids]
         self.reps = reps
+        self.sample_mode = sample_mode
         self.shuffle = shuffle
         self.seed = seed
         self._epoch = 0
@@ -61,7 +64,7 @@ class DepthSampleDataset(torch.utils.data.IterableDataset):
             yield self._sample(generator, case_id)
 
     def _sample(self, generator: Generator, case_id: int) -> tuple[np.ndarray, np.float32]:
-        x = _sample_value(generator, self.bitness, case_id, self.reps)
+        x = sample_depth_case(generator, self.bitness, case_id, self.reps, self.sample_mode)
         y = np.float32(generator.case_depth(self.bitness, case_id))
         return x, y
 
@@ -93,6 +96,7 @@ def make_depth_sample_loader(
     batch_size: int,
     workers: int,
     *,
+    sample_mode: str,
     shuffle: bool,
     drop_last: bool = False,
 ) -> torch.utils.data.DataLoader:
@@ -101,6 +105,7 @@ def make_depth_sample_loader(
         bitness,
         case_ids,
         reps,
+        sample_mode=sample_mode,
         shuffle=shuffle,
         seed=bitness + len(case_ids),
     )
@@ -125,6 +130,20 @@ def make_depth_sample_loader(
 def _collate_numpy_batch(batch):
     x, y = zip(*batch)
     return np.stack(x).astype(np.float32), np.asarray(y, dtype=np.float32)
+
+
+def sample_depth_case(
+    generator: Generator,
+    bitness: int,
+    case_id: int,
+    reps: int,
+    sample_mode: str,
+) -> np.ndarray:
+    if sample_mode == "random":
+        return _sample_value(generator, bitness, case_id, reps)
+    if sample_mode == "block":
+        return _sample_block_inversions(generator, bitness, case_id, reps)
+    assert False, f"Unknown sample mode: {sample_mode}"
 
 
 def generate_sample_tensors(
