@@ -77,6 +77,16 @@ class DepthSampler:
             self._validation_samples = self._sample_cases(self.validation_ids)
         return self._loader(*self._validation_samples, False)
 
+    def parity_inputs(self) -> np.ndarray:
+        input_bits = self._sample_input_bits(self.seed, self.reps)
+        samples = np.empty(
+            (self.reps, sample_point_dim(self.bitness)),
+            dtype=np.float32,
+        )
+        for row_id, bits in enumerate(input_bits):
+            samples[row_id] = self.generator.parity_value(self.bitness, bits)
+        return samples
+
     def _sample_cases(
         self,
         case_ids: list[int],

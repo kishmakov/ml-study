@@ -30,6 +30,12 @@ const char* generator_case_value(uint16_t bitness, size_t case_id, const char* i
 // Computes all restriction sample points for one rep as ASCII 0/1 bytes
 const char* generator_case_restrictions(uint16_t bitness, size_t case_id, size_t rep);
 
+// Same as generator_case_value, but for parity function
+const char* generator_parity_value(uint16_t bitness, const char* input);
+
+// Same as generator_case_restrictions, but for parity function
+const char* generator_parity_restrictions(uint16_t bitness, size_t rep);
+
 #ifdef __cplusplus
 }
 #endif

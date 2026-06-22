@@ -48,7 +48,10 @@ def main() -> None:
 
     for series in meta["series"]:
         out_path = join(output_dir, f"{series['name']}.png")
-        plot_series(meta["metrics"], series, out_path, args.scale)
+        if series.get("kind") == "value":
+            plot_value_series(meta["metrics"], series, out_path, args.scale)
+        else:
+            plot_series(meta["metrics"], series, out_path, args.scale)
         print(out_path)
 
 
@@ -97,6 +100,41 @@ def plot_series(
     plt.close(fig)
 
 
+def plot_value_series(
+    metrics: list[dict[str, Any]],
+    series: dict[str, Any],
+    out_path: str,
+    scale: str,
+) -> None:
+    fig, axis = plt.subplots(1, 1, figsize=(10, 6), dpi=150)
+
+    for line_id, line in enumerate(series["lines"]):
+        points = value_line_points(metrics, line)
+        if not points:
+            continue
+        y_values = transform_y_values([point["y"] for point in points], scale)
+        axis.plot(
+            [point["x"] for point in points],
+            y_values,
+            label=line["label"],
+            color=plot_color(line, line_id),
+            linewidth=float(line.get("linewidth", 2)),
+            linestyle=line.get("linestyle", "-"),
+        )
+
+    axis.set_title(series["title"])
+    axis.set_xlabel(series["x_label"])
+    axis.set_ylabel(
+        series["y_label"] if scale == "lin" else f"log({series['y_label']})"
+    )
+    axis.grid(alpha=0.2)
+    if len(axis.lines):
+        axis.legend(title=series.get("legend_title"))
+    fig.tight_layout()
+    fig.savefig(out_path)
+    plt.close(fig)
+
+
 def transform_y_values(values: list[float], scale: str) -> list[float]:
     if scale == "lin":
         return values
@@ -122,6 +160,31 @@ def line_points(metrics: list[dict[str, Any]], line: dict[str, Any]) -> list[dic
                 "x": float(metric[x_key]),
                 "mae": float(metric[mae_key]),
                 "rmse": float(metric[rmse_key]),
+            }
+        )
+
+    points.sort(key=lambda point: point["x"])
+    return points
+
+
+def value_line_points(
+    metrics: list[dict[str, Any]],
+    line: dict[str, Any],
+) -> list[dict[str, float]]:
+    x_key = line["x_key"]
+    y_key = line["y_key"]
+    where = line.get("where", {})
+
+    points = []
+    for metric in metrics:
+        if not matches_where(metric, where):
+            continue
+        if x_key not in metric or y_key not in metric:
+            continue
+        points.append(
+            {
+                "x": float(metric[x_key]),
+                "y": float(metric[y_key]),
             }
         )
 

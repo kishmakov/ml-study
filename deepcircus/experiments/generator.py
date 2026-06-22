@@ -64,6 +64,18 @@ class Generator:
             ctypes.c_size_t,
         ]
         library.generator_case_restrictions.restype = ctypes.c_char_p
+
+        library.generator_parity_value.argtypes = [
+            ctypes.c_uint16,
+            ctypes.c_char_p,
+        ]
+        library.generator_parity_value.restype = ctypes.c_char_p
+
+        library.generator_parity_restrictions.argtypes = [
+            ctypes.c_uint16,
+            ctypes.c_size_t,
+        ]
+        library.generator_parity_restrictions.restype = ctypes.c_char_p
         return library
 
     def cases_number(self, bitness: int) -> int:
@@ -104,6 +116,22 @@ class Generator:
         value = self.library.generator_case_restrictions(
             bitness,
             case_id,
+            rep,
+        )
+        point_dim = restriction_point_dim(bitness)
+        signed = _ascii_bits_to_signed(value, bitness * 2 * point_dim)
+        return signed.reshape(bitness * 2, point_dim)
+
+    def parity_value(self, bitness: int, input_bits: str) -> np.ndarray:
+        value = self.library.generator_parity_value(
+            bitness,
+            input_bits.encode("ascii"),
+        )
+        return _ascii_bits_to_signed(value, sample_point_dim(bitness))
+
+    def parity_restrictions(self, bitness: int, rep: int) -> np.ndarray:
+        value = self.library.generator_parity_restrictions(
+            bitness,
             rep,
         )
         point_dim = restriction_point_dim(bitness)

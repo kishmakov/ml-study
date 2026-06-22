@@ -66,6 +66,10 @@ def run_experiment(generator) -> None:
                 state["model"],
                 state["validation_loader"],
             )
+            parity_prediction = predict_single_depth(
+                state["model"],
+                state["parity_x"],
+            )
             save_sample_metrics(
                 meta,
                 config,
@@ -74,6 +78,7 @@ def run_experiment(generator) -> None:
                 epoch,
                 train_metrics,
                 validation_metrics,
+                parity_prediction,
             )
 
     if meta["progress"]["stage"] != "done":
@@ -105,6 +110,7 @@ def load_or_create_depth_meta(config: dict[str, Any]) -> dict[str, Any]:
     if exists(meta_path):
         meta = load_experiment_meta(meta_path)
         assert_resume_config(meta["config"], config)
+        ensure_depth_plot_series(meta, config)
         print(f"resuming from {meta_path}: progress={meta['progress']}")
         return meta
 
@@ -122,12 +128,24 @@ def load_or_create_depth_meta(config: dict[str, Any]) -> dict[str, Any]:
     return meta
 
 
+def ensure_depth_plot_series(meta: dict[str, Any], config: dict[str, Any]) -> None:
+    plot_series = build_plot_series(config)
+    if meta.get("series") == plot_series:
+        return
+
+    meta["series"] = plot_series
+    meta.pop("plot_series", None)
+    save_experiment_meta(meta, config["meta_path"])
+
+
 def build_plot_series(config: dict[str, Any]) -> list[dict[str, Any]]:
-    lines = []
+    metric_lines = []
+    parity_lines = []
+    bitness = int(config["sampler"]["bitness"])
     for sample in config["sampler"]["samples"]:
         sample_key = sample["key"]
         label = sample["label"]
-        lines.extend(
+        metric_lines.extend(
             [
                 {
                     "label": f"{label} train",
@@ -145,13 +163,39 @@ def build_plot_series(config: dict[str, Any]) -> list[dict[str, Any]]:
                 },
             ]
         )
+        parity_lines.extend(
+            [
+                {
+                    "label": f"{label} prediction",
+                    "where": {"loader": sample_key},
+                    "x_key": "epoch",
+                    "y_key": "parity_prediction",
+                },
+                {
+                    "label": f"{label} target",
+                    "where": {"loader": sample_key},
+                    "x_key": "epoch",
+                    "y_key": "parity_target",
+                    "linestyle": "--",
+                    "linewidth": 1,
+                },
+            ]
+        )
     return [
         {
             "name": "depth_metrics",
             "title": "Depth prediction metrics",
             "x_label": "Epoch",
-            "lines": lines,
-        }
+            "lines": metric_lines,
+        },
+        {
+            "kind": "value",
+            "name": "parity_depth",
+            "title": f"Parity depth prediction, target depth {bitness}",
+            "x_label": "Epoch",
+            "y_label": "Predicted depth",
+            "lines": parity_lines,
+        },
     ]
 
 
@@ -181,6 +225,7 @@ def build_training_state(
 ) -> dict[str, Any]:
     sample_key = sampler.name
     train_loader, validation_loader = sampler.training_inputs()
+    parity_x = sampler.parity_inputs()
 
     model_config = dict(config["model"])
     model_name = model_config.pop("name")
@@ -211,6 +256,7 @@ def build_training_state(
         "model": model,
         "train_loader": train_loader,
         "validation_loader": validation_loader,
+        "parity_x": parity_x,
         "optimizer": optimizer,
         "scheduler": scheduler,
     }
@@ -224,10 +270,12 @@ def save_sample_metrics(
     epoch: int,
     train_metrics: dict[str, float],
     validation_metrics: dict[str, float],
+    parity_prediction: float,
 ) -> None:
     sample_key = sample["key"]
     global_step = int(meta["progress"]["global_step"]) + 1
     train_epochs = int(config["optimiser"]["train_epochs"])
+    parity_target = float(config["sampler"]["bitness"])
     progress = {
         "stage": "train" if epoch < train_epochs else "done",
         "epoch": epoch,
@@ -244,6 +292,9 @@ def save_sample_metrics(
         "train_mae": train_metrics["mad"],
         "validation_rmse": validation_metrics["rmse"],
         "validation_mae": validation_metrics["mad"],
+        "parity_prediction": float(parity_prediction),
+        "parity_target": parity_target,
+        "parity_error": float(parity_prediction - parity_target),
     }
     meta.setdefault("metrics", []).append(metric)
     meta["progress"]["global_step"] = global_step
@@ -261,7 +312,8 @@ def save_sample_metrics(
         f"train_rmse={metric['train_rmse']:.4f}  "
         f"train_mae={metric['train_mae']:.4f}  "
         f"validation_rmse={metric['validation_rmse']:.4f}  "
-        f"validation_mae={metric['validation_mae']:.4f}"
+        f"validation_mae={metric['validation_mae']:.4f}  "
+        f"parity={metric['parity_prediction']:.4f}/{parity_target:.0f}"
     )
 
 
@@ -321,6 +373,19 @@ def evaluate_regression_loader(
         np.concatenate(predictions).astype(np.float32),
         np.concatenate(targets).astype(np.float32),
     )
+
+
+def predict_single_depth(model: nn.Module, x: np.ndarray) -> float:
+    model.to(DEVICE)
+    model.eval()
+
+    with torch.no_grad():
+        xb = torch.as_tensor(
+            x[None, :, :],
+            dtype=torch.float32,
+            device=DEVICE,
+        )
+        return float(model(xb).detach().cpu().numpy().ravel()[0])
 
 
 def train_regression_epoch(
