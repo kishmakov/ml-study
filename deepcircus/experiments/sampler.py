@@ -62,7 +62,10 @@ class DepthSampler:
         return self.train_loader(), self.validation_loader()
 
     def model_params(self) -> dict[str, int]:
-        return {"point_dim": sample_point_dim(self.bitness)}
+        return {
+            "point_dim": sample_point_dim(self.bitness),
+            "n_points": self.reps,
+        }
 
     def train_loader(self) -> torch.utils.data.DataLoader:
         if self._train_samples is None:

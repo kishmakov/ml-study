@@ -10,6 +10,7 @@ class DeepSetPredictor(nn.Module):
     def __init__(
         self,
         point_dim: int,
+        n_points: int,
         phi_hidden: int,
         phi_out: int,
         rho_hidden: int,
@@ -29,9 +30,10 @@ class DeepSetPredictor(nn.Module):
             nn.ReLU(),
         )
 
-        # rho: post-pooling MLP, operates on the aggregated set representation
+        self.phi_to_rho = nn.Linear(n_points * phi_out, rho_hidden)
+
+        # rho: operates on the projected per-point phi representation
         self.rho = nn.Sequential(
-            nn.Linear(phi_out * 2, rho_hidden),
             nn.BatchNorm1d(rho_hidden),
             nn.ReLU(),
             nn.Dropout(dropout),
@@ -49,9 +51,8 @@ class DeepSetPredictor(nn.Module):
         b, n, d = x.shape
         # apply phi to every point independently (shared weights)
         h = self.phi(x.reshape(b * n, d)).reshape(b, n, -1)  # (batch, n, phi_out)
-        # symmetric pooling over the point dimension
-        pooled = torch.cat([h.sum(dim=1), h.max(dim=1).values], dim=-1)
-        return self.rho(pooled)  # raw logits, (batch, 1)
+        rho_input = self.phi_to_rho(h.reshape(b, n * h.shape[-1]))
+        return self.rho(rho_input)  # raw logits, (batch, 1)
 
 
 def predict_values(
