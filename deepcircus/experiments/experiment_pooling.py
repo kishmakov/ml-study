@@ -7,7 +7,6 @@ from tqdm import tqdm
 
 from experiments.model import (
     DEVICE,
-    PREDICT_BATCH_SIZE,
     DeepSetPredictor,
     evaluate_regression,
     predict_values,
@@ -45,6 +44,15 @@ REPS = 128
 MODELS = {}
 THRESHOLD = 0.025
 
+MODEL = {
+    "name": "deepset",
+    "phi_hidden": 512,
+    "phi_out": 256,
+    "rho_hidden": 512,
+    "dropout": 0.3,
+    "predict_batch_size": 1024,
+}
+
 TARGET_CASE_BATCH_SIZE = 128
 TARGET_PROCESSES = 16
 SEED_OFFSET = 239
@@ -58,9 +66,15 @@ GROUPS = (
 )
 
 
-def approximate_targets(generator, bitness: int, case_ids: list[int]) -> np.ndarray:
+def approximate_targets(
+    generator,
+    config: dict,
+    bitness: int,
+    case_ids: list[int],
+) -> np.ndarray:
     previous_model = MODELS.get(bitness - 1)
     assert previous_model, f"Missing model for bitness {bitness - 1}"
+    predict_batch_size = int(config["model"]["predict_batch_size"])
 
     target_parts = []
     ranges = range(0, len(case_ids), TARGET_CASE_BATCH_SIZE)
@@ -79,7 +93,7 @@ def approximate_targets(generator, bitness: int, case_ids: list[int]) -> np.ndar
             REPS,
             TARGET_PROCESSES,
         )
-        predictions = predict_values(previous_model, x_restricted)
+        predictions = predict_values(previous_model, x_restricted, predict_batch_size)
         predictions = predictions.reshape(len(batch_ids), bitness, 2)
         predictions = np.clip(
             predictions,
@@ -93,7 +107,7 @@ def approximate_targets(generator, bitness: int, case_ids: list[int]) -> np.ndar
     return np.concatenate(target_parts).astype(np.float32)
 
 
-def build_dataset(generator, bitness: int, seed: int):
+def build_dataset(generator, config: dict, bitness: int, seed: int):
     ids = generate_ids(generator, bitness, TRAIN_SAMPLES, seed)
     if bitness <= 4:
         x_train, y_train = generate_samples(
@@ -103,16 +117,22 @@ def build_dataset(generator, bitness: int, seed: int):
         return x_train, y_train
 
     x_train = generate_sample_tensors(generator, bitness, ids, REPS, TARGET_PROCESSES)
-    y_train = approximate_targets(generator, bitness, ids)
+    y_train = approximate_targets(generator, config, bitness, ids)
     return x_train, y_train
 
 
 def evaluate_validation(
     model: nn.Module,
+    config: dict,
     x_validation: np.ndarray,
     y_validation: np.ndarray,
 ) -> dict[str, float]:
-    metrics = evaluate_regression(model, x_validation, y_validation)
+    metrics = evaluate_regression(
+        model,
+        x_validation,
+        y_validation,
+        int(config["model"]["predict_batch_size"]),
+    )
     return {
         "rmse": metrics["rmse"],
         "mae": metrics["mad"],
@@ -215,7 +235,7 @@ def run_experiment(generator):
     validation = {}
     for bitness in range(MIN_BITNESS, MAX_BITNESS + 1):
         point_dim = 2 * bitness + 1
-        MODELS[bitness] = DeepSetPredictor(point_dim)
+        MODELS[bitness] = build_model(point_dim, config)
         checkpoint = load_model_checkpoint_if_exists(DEFAULT_MODEL_DIR, bitness, DEVICE)
         if checkpoint is not None:
             MODELS[bitness].load_state_dict(checkpoint["state_dict"])
@@ -227,7 +247,7 @@ def run_experiment(generator):
                 continue
 
             seed = iteration + SEED_OFFSET
-            x_train, y_train = build_dataset(generator, bitness, seed)
+            x_train, y_train = build_dataset(generator, config, bitness, seed)
             loss = train(
                 bitness,
                 x_train,
@@ -240,6 +260,7 @@ def run_experiment(generator):
             )
             validation_result = evaluate_validation(
                 MODELS[bitness],
+                config,
                 validation[bitness]["x"],
                 validation[bitness]["y"],
             )
@@ -271,12 +292,21 @@ def build_config() -> dict:
         "lr": LR,
         "reps": REPS,
         "threshold": THRESHOLD,
+        "model": dict(MODEL),
         "seed_offset": SEED_OFFSET,
         "validation_seed_offset": VALIDATION_SEED_OFFSET,
-        "predict_batch_size": PREDICT_BATCH_SIZE,
+        "predict_batch_size": MODEL["predict_batch_size"],
         "target_case_batch_size": TARGET_CASE_BATCH_SIZE,
         "target_processes": TARGET_PROCESSES,
     }
+
+
+def build_model(point_dim: int, config: dict) -> DeepSetPredictor:
+    model_config = dict(config["model"])
+    model_name = model_config.pop("name")
+    model_config.pop("predict_batch_size", None)
+    assert model_name == "deepset", model_name
+    return DeepSetPredictor(point_dim=point_dim, **model_config)
 
 
 def create_validation_config() -> dict[str, dict[str, list[int]]]:

@@ -2,14 +2,19 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-PREDICT_BATCH_SIZE = 1024
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 # ── Model ─────────────────────────────────────────────────────────────────────
 
 class DeepSetPredictor(nn.Module):
-    def __init__(self, point_dim: int, phi_hidden: int = 512, phi_out: int = 256,
-                 rho_hidden: int = 512, dropout: float = 0.3):
+    def __init__(
+        self,
+        point_dim: int,
+        phi_hidden: int,
+        phi_out: int,
+        rho_hidden: int,
+        dropout: float,
+    ):
         super().__init__()
 
         # phi: shared per-point MLP, applied independently to each of the n points
@@ -49,15 +54,19 @@ class DeepSetPredictor(nn.Module):
         return self.rho(pooled)  # raw logits, (batch, 1)
 
 
-def predict_values(model: nn.Module, x: np.ndarray) -> np.ndarray:
+def predict_values(
+    model: nn.Module,
+    x: np.ndarray,
+    predict_batch_size: int,
+) -> np.ndarray:
     model.to(DEVICE)
     model.eval()
 
     predictions = []
     with torch.no_grad():
-        for start in range(0, len(x), PREDICT_BATCH_SIZE):
+        for start in range(0, len(x), predict_batch_size):
             xb = torch.as_tensor(
-                x[start : start + PREDICT_BATCH_SIZE],
+                x[start : start + predict_batch_size],
                 dtype=torch.float32,
                 device=DEVICE,
             )
@@ -75,5 +84,10 @@ def regression_metrics(predictions: np.ndarray, targets: np.ndarray) -> dict[str
     }
 
 
-def evaluate_regression(model: nn.Module, x: np.ndarray, y: np.ndarray) -> dict[str, float]:
-    return regression_metrics(predict_values(model, x), y)
+def evaluate_regression(
+    model: nn.Module,
+    x: np.ndarray,
+    y: np.ndarray,
+    predict_batch_size: int,
+) -> dict[str, float]:
+    return regression_metrics(predict_values(model, x, predict_batch_size), y)

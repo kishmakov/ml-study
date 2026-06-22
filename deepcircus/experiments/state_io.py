@@ -222,6 +222,7 @@ def assert_resume_config(saved: dict[str, Any], current: dict[str, Any]) -> None
         "lr",
         "reps",
         "threshold",
+        "model",
         "seed_offset",
         "validation_seed_offset",
         "predict_batch_size",
