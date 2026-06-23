@@ -1,0 +1,3 @@
+[submodule "deepcircus/generator"]
+	path = deepcircus/generator
+	url = ssh://GITHUB/kishmakov/bool-bench.git
