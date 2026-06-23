@@ -17,3 +17,5 @@ cmake-build-debug
 .ipynb_checkpoints
 *.pyc
 tmp
+build
+.idea
