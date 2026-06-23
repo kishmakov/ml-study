@@ -19,7 +19,7 @@ def parse_args():
 
 def main() -> None:
     args = parse_args()
-    from experiments.generator import load_generator
+    from generator.generator import load_generator
 
     generator = load_generator()
 

@@ -5,7 +5,7 @@ import random
 import torch
 from tqdm import tqdm
 
-from experiments.generator import (
+from generator.generator import (
     Generator,
     generate_depths_tensors,
     generate_restriction_tensors as _generate_restriction_tensors,
