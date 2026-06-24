@@ -31,7 +31,7 @@ This is a research project to study ML approach to handle decision trees.
 
 # Building
 
-- `scripts/build_generator.sh` builds bool-bench in `build` directory;
+- `bool-bench/build.sh` builds bool-bench in `build` directory;
    this is where generator is supposed to be stored
 
 # Running
