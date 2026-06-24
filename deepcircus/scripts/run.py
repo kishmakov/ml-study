@@ -9,6 +9,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 
 sys.path = [path for path in sys.path if Path(path or ".").resolve() != SCRIPT_DIR]
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "bool-bench"))
 
 
 def parse_args():
@@ -19,7 +20,7 @@ def parse_args():
 
 def main() -> None:
     args = parse_args()
-    from generator.generator import load_generator
+    from bool_bench import load_generator
 
     generator = load_generator()
 

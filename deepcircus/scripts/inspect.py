@@ -8,8 +8,9 @@ from pathlib import Path
 SCRIPT_DIR = str(Path(__file__).resolve().parent)
 sys.path = [path for path in sys.path if path != SCRIPT_DIR]
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "bool-bench"))
 
-from generator.generator import load_generator
+from bool_bench import load_generator
 
 
 def input_bits(input_id: int, bitness: int) -> str:

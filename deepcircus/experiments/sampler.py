@@ -1,11 +1,18 @@
 from __future__ import annotations
 
-import numpy as np
+from pathlib import Path
 import random
+import sys
+
+import numpy as np
 import torch
 from tqdm import tqdm
 
-from generator.generator import (
+BOOL_BENCH_DIR = Path(__file__).resolve().parents[1] / "bool-bench"
+if str(BOOL_BENCH_DIR) not in sys.path:
+    sys.path.insert(0, str(BOOL_BENCH_DIR))
+
+from bool_bench import (
     Generator,
     generate_depths_tensors,
     generate_restriction_tensors as _generate_restriction_tensors,
