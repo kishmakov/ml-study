@@ -3,5 +3,5 @@
   "search.exclude": {
     "**/.venv": true
   },
-  "cmake.sourceDirectory": "/home/kishmakov/Repos/shad/ml-study/deepcircus/generator"
+  "cmake.sourceDirectory": "/home/kishmakov/Repos/shad/ml-study/deepcircus/bool-bench"
 }

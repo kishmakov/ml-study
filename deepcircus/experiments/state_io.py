@@ -227,7 +227,6 @@ def assert_resume_config(saved: dict[str, Any], current: dict[str, Any]) -> None
         "validation_seed_offset",
         "predict_batch_size",
         "target_case_batch_size",
-        "target_processes",
     )
     for key in keys:
         assert saved[key] == current[key], (

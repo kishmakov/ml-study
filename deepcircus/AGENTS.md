@@ -4,18 +4,14 @@ This is a research project to study ML approach to handle decision trees.
 
 # Implementation Details
 
+- Keep this project encapsulated in its directory like it is in its own git
 - Keep assertion checks simple `assert foo, bar`, don't use ifs
 - In C++ use plain asserts `assert(condition)`
 - Keep C++ generation deterministic from `(bitness, case_id)`
 - Do not add package-presence guards (e.g. `assert torch is not None`)
-- Do not generalize code for running
+- Do not generalize code for running in other environments, it is only run on this machine
 - The generator API is bitness-based: use `uint16_t bitness`, not series ids or bit masks
-- `generator_case_value` receives exactly `bitness` input characters
-- Bitness is always a parameter
-- Python sample-generation multiprocessing uses a `fork` process pool; keep worker helpers in `bool-bench/bool_bench.py`
-- Assign reduced-sample generation work to workers by `case_id % processes`
-- For bitness `0..4`, generate exact truth-table trees and cache them under `tmp/small_trees.treepack`
-- For larger bitness, use the random tree generator over bits `0..bitness-1`
+
 
 # Code Layout
 
@@ -26,7 +22,6 @@ This is a research project to study ML approach to handle decision trees.
 - `bool-bench/bool_bench.py` owns generator loading, ctypes signatures, the Python generator wrapper, and sample generation helpers
 - `experiments/experiment_*.py` should contain experiment logic only; do not put ctypes or shared-library details there
 - `scripts/*.py` should stay thin entrypoints over experiment/generator helpers
-- `scripts/inspect.py` inspects small-bitness trees via `experiments.generator`
 
 
 # Building

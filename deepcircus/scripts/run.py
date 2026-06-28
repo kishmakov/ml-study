@@ -1,35 +1,26 @@
 #!/usr/bin/env python3
 
-from argparse import ArgumentParser
 import sys
 from pathlib import Path
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+DEEPCIRCUS_DIR = Path(__file__).resolve().parents[1]
 
 sys.path = [path for path in sys.path if Path(path or ".").resolve() != SCRIPT_DIR]
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "bool-bench"))
-
-
-def parse_args():
-    parser = ArgumentParser()
-    parser.add_argument("experiment", choices=("depth", "pooling"))
-    return parser.parse_args()
+sys.path.insert(0, str(DEEPCIRCUS_DIR))
+sys.path.insert(0, str(DEEPCIRCUS_DIR / "bool-bench"))
 
 
 def main() -> None:
-    args = parse_args()
-    from bool_bench import load_generator
+    from experiments.bitness import run_training
+    from experiments.generator_proxy import GeneratorProxy
 
-    generator = load_generator()
-
-    if args.experiment == "depth":
-        from experiments.experiment_depth import run_experiment
-    else:
-        from experiments.experiment_pooling import run_experiment
-
-    run_experiment(generator)
+    generator = GeneratorProxy(16)
+    try:
+        run_training(generator)
+    finally:
+        generator.close()
 
 
 if __name__ == "__main__":

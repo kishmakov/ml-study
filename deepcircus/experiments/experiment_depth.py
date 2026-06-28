@@ -215,7 +215,6 @@ def build_sampler(
         sample["method"],
         int(sample["reps"]),
         batch_size=int(config["optimiser"]["batch_size"]),
-        workers=int(sampler["processes"]),
     )
 
 

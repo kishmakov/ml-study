@@ -13,12 +13,10 @@ if str(BOOL_BENCH_DIR) not in sys.path:
     sys.path.insert(0, str(BOOL_BENCH_DIR))
 
 from bool_bench import (
-    Generator,
-    generate_depths_tensors,
-    generate_restriction_tensors as _generate_restriction_tensors,
-    generate_value_tensors,
     sample_point_dim,
 )
+
+from experiments.generator_proxy import GeneratorProxy
 
 torch.multiprocessing.set_sharing_strategy("file_system")
 
@@ -31,7 +29,7 @@ _SAMPLE_TARGET_CACHE = {}
 class DepthSampler:
     def __init__(
         self,
-        generator: Generator,
+        generator: GeneratorProxy,
         bitness: int,
         seed: int,
         train_size: int,
@@ -40,7 +38,6 @@ class DepthSampler:
         method: str,
         reps: int,
         batch_size: int,
-        workers: int,
     ):
         self.generator = generator
         self.bitness = bitness
@@ -51,7 +48,6 @@ class DepthSampler:
         self.method = method
         self.reps = reps
         self.batch_size = batch_size
-        self.workers = workers
 
         ids = generate_ids(generator, bitness, train_size + validation_size, seed)
         train_ids = ids[:train_size]
@@ -105,14 +101,8 @@ class DepthSampler:
                 desc=f"inputs {self.method}",
             )
         ]
-        x = generate_value_tensors(
-            self.generator,
-            self.bitness,
-            case_ids,
-            input_bits,
-            self.workers,
-        )
-        y = generate_depths_tensors(self.generator, self.bitness, case_ids, self.workers)
+        x = self.generator.generate_value_tensors(self.bitness, case_ids, input_bits)
+        y = self.generator.generate_depths_tensors(self.bitness, case_ids)
         print(
             f"Generated {len(x)} depth samples; "
             f"sample_shape={tuple(x.shape[1:])}"
@@ -171,7 +161,7 @@ def _sample_to_bit_strings(sample: np.ndarray) -> list[str]:
 
 
 def generate_ids(
-    generator: Generator,
+    generator: GeneratorProxy,
     bitness: int,
     number: int,
     seed: int,
@@ -216,59 +206,53 @@ def _split_bit_blocks(bitness: int, blocks: int) -> list[range]:
 
 
 def generate_sample_tensors(
-    generator: Generator,
+    generator: GeneratorProxy,
     bitness: int,
     case_ids: list[int],
     reps: int,
-    processes: int,
 ) -> np.ndarray:
     case_ids = list(case_ids)
-    cache_key = (generator.library_path, bitness, _case_ids_key(case_ids), reps)
+    cache_key = (bitness, _case_ids_key(case_ids), reps)
     if cache_key in _SAMPLE_TENSOR_CACHE:
         return _SAMPLE_TENSOR_CACHE[cache_key]
 
     print(f"Generating {len(case_ids)} sample tensors for bitness {bitness}")
     input_bits = [random_input_bits(bitness, case_id, reps) for case_id in case_ids]
-    x = generate_value_tensors(generator, bitness, case_ids, input_bits, processes)
+    x = generator.generate_value_tensors(bitness, case_ids, input_bits)
 
     # _SAMPLE_TENSOR_CACHE[cache_key] = x
     return x
 
 
 def generate_restriction_tensors(
-    generator: Generator,
+    generator: GeneratorProxy,
     bitness: int,
     case_ids: list[int],
     reps: int,
-    processes: int,
 ) -> np.ndarray:
     case_ids = list(case_ids)
     cache_key = (bitness, _case_ids_key(case_ids), reps)
     if cache_key in _RESTRICTION_TENSOR_CACHE:
         return _RESTRICTION_TENSOR_CACHE[cache_key]
 
-    x = _generate_restriction_tensors(generator, bitness, case_ids, reps, processes)
+    x = generator.generate_restriction_tensors(bitness, case_ids, reps)
     # _RESTRICTION_TENSOR_CACHE[cache_key] = x
     return x
 
 
 def generate_samples(
-    generator: Generator,
+    generator: GeneratorProxy,
     bitness: int,
     case_ids: list[int],
     reps: int,
-    processes: int,
 ) -> tuple[np.ndarray, np.ndarray]:
     case_ids = list(case_ids)
-    cache_key = (generator.library_path, bitness, _case_ids_key(case_ids), reps)
+    cache_key = (bitness, _case_ids_key(case_ids), reps)
     if cache_key in _SAMPLE_TARGET_CACHE:
         return _SAMPLE_TARGET_CACHE[cache_key]
 
-    x = generate_sample_tensors(generator, bitness, case_ids, reps, processes)
-    y = np.asarray(
-        [generator.case_nodes(bitness, case_id) for case_id in case_ids],
-        dtype=np.int64,
-    )
+    x = generate_sample_tensors(generator, bitness, case_ids, reps)
+    y = generator.generate_node_tensors(bitness, case_ids).astype(np.int64)
     result = (x, y)
     _SAMPLE_TARGET_CACHE[cache_key] = result
     return result
