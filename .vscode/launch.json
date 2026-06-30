@@ -1,16 +1,4 @@
 {
   "version": "0.2.0",
-  "configurations": [
-    {
-      "name": "Train",
-      "type": "debugpy",
-      "request": "launch",
-      "program": "${workspaceFolder}/deepcircus/scripts/run.py",
-      "args": ["depth"],
-      "console": "integratedTerminal",
-      "env": {},
-      "python": "${workspaceFolder}/deepcircus/.venv/bin/python",
-      "cwd": "${workspaceFolder}/deepcircus"
-    }
-  ]
+  "configurations": []
 }
