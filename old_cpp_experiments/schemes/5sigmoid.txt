@@ -1,5 +1,0 @@
-sigmoid -1 -2 -3 -4
-sigmoid -1 -2 -3 -4
-sigmoid -1 -2 -3 -4
-sigmoid -1 -2 -3 -4
-sigmoid 1 2 3 4
